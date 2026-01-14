@@ -22,14 +22,16 @@ import numpy as np
 import cv2
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
+import logging
 
-# from MVSDK.IMVApi import MvCamera
-# from MVSDK.IMVDefines import *
 from code_recognition import CodeRecognizer
-from ctypes import byref, c_ubyte, c_uint
+from ctypes import *
 
 sys.path.append("C:/Program Files/HuarayTech/MV Viewer/Development/Samples/Python/IMV/MVSDK")
 from IMVApi import *
+
+logging.basicConfig(filename='camera_worker.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class CameraWorker(QThread):
     """
@@ -85,9 +87,11 @@ class CameraWorker(QThread):
 
             if ret != IMV_OK:
                 self.error_signal.emit(f"Failed to start grabbing. Error code: {ret}")
+                logging.error(f"IMV_StartGrabbing failed with code: {ret}")
                 return
 
             self.status_signal.emit("Frame acquisition started successfully")
+            logging.info("Camera grabbing started")
 
             # Step 2: Main frame processing loop
             while self.running:
@@ -114,10 +118,12 @@ class CameraWorker(QThread):
                     # Convert to QImage and emit for display
                     q_image = self._convert_to_qimage(cv_image)
                     if q_image is not None:
+                        logger.debug("Emitting image signal to UI thread")
                         self.image_signal.emit(q_image)
 
                 except Exception as e:
                     self.status_signal.emit(f"Frame processing error: {str(e)}")
+                    logging.error(f"Frame processing exception: {str(e)}")
                     continue
 
         except Exception as e:
@@ -137,14 +143,14 @@ class CameraWorker(QThread):
         TODO: Add timeout configuration
         TODO: Implement frame buffer management
         """
-        frame = IMV_Frame()
-        ret = self.camera.IMV_GetFrame(byref(frame), 1000)  # 1000ms timeout
+        frame = IMV_Frame()  # IMV_Frame defined in IMVADefines
+        ret = self.camera.IMV_GetFrame(frame, 1000)  # 1000ms timeout
 
-        if ret != IMV_OK:
-            if ret != IMV_ERROR_TIMEOUT:  # Don't log timeouts
-                self.status_signal.emit(f"Frame acquisition error: {ret}")
+        if ret != IMV_OK:  # IMV_OK defined in IMVADefines
+            self.status_signal.emit(f"Frame acquisition error: {ret}")
+            logger.error(f"IMV_GetFrame failed with code: {ret}")
             return None
-
+        logger.debug("Frame acquired successfully")
         return frame
 
     def _convert_to_opencv(self, frame_data):
@@ -157,7 +163,7 @@ class CameraWorker(QThread):
         Returns:
             numpy array (OpenCV image) or None
 
-        TODO: Support more pixel formats (Bayer, YUV, etc.)
+        TODO: Support more pixel formats or do format conversion
         TODO: Add color space conversion options
         """
         try:
@@ -167,7 +173,7 @@ class CameraWorker(QThread):
             pixel_format = frame_data.frameInfo.pixelFormat
 
             # Create numpy array from buffer
-            # TODO: Handle different pixel formats properly
+            # TODO: Handle different pixel formats properly (A7500CG20 output format: gvspPixelBayRG8--17301513)
             if pixel_format == IMV_EPixelType.gvspPixelMono8:
                 # Mono 8-bit
                 image_array = np.frombuffer(
@@ -189,10 +195,12 @@ class CameraWorker(QThread):
             else:
                 # Unsupported format
                 self.status_signal.emit(f"Unsupported pixel format: {pixel_format}")
+                logger.error(f"Unsupported pixel format encountered: {pixel_format}")
                 return None
 
             # Release frame buffer
-            self.camera.IMV_ReleaseFrame(byref(frame_data))
+            self.camera.IMV_ReleaseFrame(frame_data)
+            logger.debug("Released frame buffer back to SDK")
 
             return cv_image
 
@@ -222,7 +230,7 @@ class CameraWorker(QThread):
                 width,
                 height,
                 bytes_per_line,
-                QImage.Format_RGB888
+                QImage.Format.Format_RGB888
             )
 
             return q_image.copy()  # Create a copy to avoid data corruption

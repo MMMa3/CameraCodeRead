@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QImage, QPixmap
+import logging
 
 # Import SDK and custom modules
 from camera_worker import CameraWorker
@@ -48,6 +49,9 @@ class CameraControlApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        # Logger
+        logging.basicConfig(filename='camera_app.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
         self.setWindowTitle("Industrial Camera Control - QR/Barcode Recognition")
         self.setGeometry(100, 100, 1200, 800)
 
@@ -146,6 +150,7 @@ class CameraControlApp(QMainWindow):
         TODO: Add error handling for device enumeration failures
         """
         self.log_message("Discovering devices...")
+        self.logger.info("Discovering devices...")
 
         try:
             # Create device list structure
@@ -166,12 +171,14 @@ class CameraControlApp(QMainWindow):
             # Check if any devices found
             if self.device_list.nDevNum == 0:
                 self.log_message("No devices found. Please check camera connection.")
+                self.logger.info("No devices found during discovery")
                 self.device_combo.addItem("No devices found")
                 self.connect_btn.setEnabled(False)
                 return
 
             # Populate device list
             self.log_message(f"Found {self.device_list.nDevNum} device(s)")
+            self.logger.info(f"Found {self.device_list.nDevNum} device(s)")
 
             for i in range(self.device_list.nDevNum):
                 device_info = self.device_list.pDevInfo[i]
@@ -194,10 +201,12 @@ class CameraControlApp(QMainWindow):
             # Enable connect button
             self.connect_btn.setEnabled(True)
             self.log_message("Device discovery completed successfully")
+            self.logger.info("Device discovery completed successfully")
             self.statusBar().showMessage(f"Found {self.device_list.nDevNum} device(s) - Ready to connect")
 
         except Exception as e:
             self.log_message(f"ERROR: Exception during device discovery: {str(e)}")
+            self.logger.exception("Exception during device discovery")
             QMessageBox.critical(self, "Error", f"Exception occurred:\n{str(e)}")
 
     def toggle_connection(self):
@@ -234,10 +243,12 @@ class CameraControlApp(QMainWindow):
 
         self.log_message(f"Connecting to device {self.selected_device_index}...")
         self.statusBar().showMessage("Connecting to camera...")
+        self.logger.info(f"Connecting to device index: {self.selected_device_index}")
 
         try:
             # Step 1: Create device handle
             self.log_message("Step 1/3: Creating device handle...")
+            self.logger.info("Creating device handle")
             device_info = self.device_list.pDevInfo[self.selected_device_index]
             ret = self.camera.IMV_CreateHandle(
                 IMV_ECreateHandleMode.modeByIndex,  # TODO: Use modeByIPAddress instead
@@ -245,6 +256,7 @@ class CameraControlApp(QMainWindow):
             )
 
             if ret != IMV_OK:
+                self.logger.error(f"IMV_CreateHandle failed: {ret}")
                 raise Exception(f"Failed to create device handle. Error code: {ret}")
 
             self.log_message("Device handle created successfully")
@@ -258,9 +270,11 @@ class CameraControlApp(QMainWindow):
                 raise Exception(f"Failed to open camera. Error code: {ret}")
 
             self.log_message("Camera opened successfully")
+            self.logger.info("Camera opened successfully")
 
             # Step 3: Start worker thread for streaming
             self.log_message("Step 3/3: Starting video stream...")
+            self.logger.info("Starting worker thread for streaming")
             self.worker = CameraWorker(self.camera)
 
             # Connect worker signals to UI slots
@@ -278,10 +292,12 @@ class CameraControlApp(QMainWindow):
             self.refresh_btn.setEnabled(False)
 
             self.log_message("Camera connected and streaming started successfully!")
+            self.logger.info("Camera connected and streaming started successfully")
             self.statusBar().showMessage("Camera connected - Streaming active")
 
         except Exception as e:
             self.log_message(f"ERROR: Connection failed - {str(e)}")
+            self.logger.exception("Connection failed")
             QMessageBox.critical(self, "Connection Error", f"Failed to connect to camera:\n{str(e)}")
             self.statusBar().showMessage("Connection failed")
 
@@ -289,6 +305,7 @@ class CameraControlApp(QMainWindow):
             if self.camera.IMV_IsOpen():
                 self.camera.IMV_Close()
             self.camera.IMV_DestroyHandle()
+            self.logger.info("Cleanup after failed connection executed")
 
     def disconnect_camera(self):
         """
@@ -304,11 +321,13 @@ class CameraControlApp(QMainWindow):
         """
         self.log_message("Disconnecting camera...")
         self.statusBar().showMessage("Disconnecting...")
+        self.logger.info("Disconnect initiated by user")
 
         try:
             # Step 1: Stop worker thread
             if self.worker is not None:
                 self.log_message("Step 1/3: Stopping video stream...")
+                self.logger.info("Stopping worker thread")
                 self.worker.stop()
                 self.worker.wait(5000)  # Wait up to 5 seconds for thread to finish
 
@@ -322,20 +341,25 @@ class CameraControlApp(QMainWindow):
 
             # Step 2: Close camera
             self.log_message("Step 2/3: Closing camera...")
+            self.logger.info("Closing camera if open")
             if self.camera.IMV_IsOpen():
                 ret = self.camera.IMV_Close()
                 if ret != IMV_OK:
                     self.log_message(f"WARNING: Camera close returned error code: {ret}")
+                    self.logger.warning(f"Camera close returned error code: {ret}")
                 else:
                     self.log_message("Camera closed successfully")
+                    self.logger.info("Camera closed successfully")
 
             # Step 3: Destroy device handle
             self.log_message("Step 3/3: Destroying device handle...")
             ret = self.camera.IMV_DestroyHandle()
             if ret != IMV_OK:
                 self.log_message(f"WARNING: Handle destruction returned error code: {ret}")
+                self.logger.warning(f"Handle destruction returned error code: {ret}")
             else:
                 self.log_message("Device handle destroyed successfully")
+                self.logger.info("Device handle destroyed successfully")
 
             # Update UI state
             self.connect_btn.setText("Connect")
@@ -349,6 +373,7 @@ class CameraControlApp(QMainWindow):
 
         except Exception as e:
             self.log_message(f"ERROR: Disconnection error - {str(e)}")
+            self.logger.exception("Disconnection error")
             QMessageBox.warning(self, "Disconnection Error", f"Error during disconnection:\n{str(e)}")
 
     @Slot(QImage)

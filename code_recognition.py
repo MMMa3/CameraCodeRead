@@ -17,6 +17,7 @@ Features:
 
 import cv2
 import numpy as np
+import logging
 
 # TODO: Install these libraries: pip install opencv-contrib-python pyzbar
 try:
@@ -24,7 +25,9 @@ try:
     PYZBAR_AVAILABLE = True
 except ImportError:
     PYZBAR_AVAILABLE = False
-    print("WARNING: pyzbar not available. Barcode detection disabled.")
+    logging.basicConfig(filename='code_recognition.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+    logger.warning("pyzbar not available. Barcode detection disabled.")
 
 
 class CodeRecognizer:
@@ -50,9 +53,11 @@ class CodeRecognizer:
                 "sr.prototxt", "sr.caffemodel"
             )
             self.qr_available = True
-        except:
+        except Exception as e:
             self.qr_available = False
-            print("WARNING: OpenCV wechat_qrcode not available. QR detection disabled.")
+            logging.basicConfig(filename='code_recognition.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s')
+            logger = logging.getLogger(__name__)
+            logger.warning(f"OpenCV wechat_qrcode not available. QR detection disabled: {e}")
 
         self.last_result = None  # For deduplication
 
@@ -88,6 +93,7 @@ class CodeRecognizer:
             # Simple deduplication
             if combined != self.last_result:
                 self.last_result = combined
+                logging.getLogger(__name__).info(f"Detected codes: {combined}")
                 return combined
 
         return None
@@ -110,14 +116,10 @@ class CodeRecognizer:
                 if text:
                     results.append(f"QR:{text}")
 
-                    # TODO: Draw bounding box on image
-                    # if len(points) > i:
-                    #     self._draw_box(image, points[i])
-
             return results
 
         except Exception as e:
-            print(f"QR detection error: {e}")
+            logging.getLogger(__name__).exception(f"QR detection error: {e}")
             return []
 
     def _detect_barcodes(self, image):
@@ -141,14 +143,10 @@ class CodeRecognizer:
 
                 results.append(f"{barcode_type}:{barcode_data}")
 
-                # TODO: Draw bounding box
-                # points = barcode.polygon
-                # self._draw_polygon(image, points)
-
             return results
 
         except Exception as e:
-            print(f"Barcode detection error: {e}")
+            logging.getLogger(__name__).exception(f"Barcode detection error: {e}")
             return []
 
     def _draw_box(self, image, points):
