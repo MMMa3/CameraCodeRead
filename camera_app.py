@@ -23,7 +23,7 @@ Workflow:
 import sys
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox, QMessageBox
+    QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox, QMessageBox, QSizePolicy
 )
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QImage, QPixmap
@@ -87,7 +87,7 @@ class CameraControlApp(QMainWindow):
 
         # Device dropdown
         self.device_combo = QComboBox()
-        self.device_combo.setMinimumWidth(400)
+        self.device_combo.setMinimumWidth(600)
         device_layout.addWidget(QLabel("Available Devices:"))
         device_layout.addWidget(self.device_combo)
 
@@ -114,6 +114,7 @@ class CameraControlApp(QMainWindow):
         self.video_label = QLabel("No camera connected")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter) # Center alignment, original parameter:"Qt.AlignCenter"
         self.video_label.setMinimumSize(800, 600)
+        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.video_label.setStyleSheet("QLabel { background-color: #2b2b2b; color: white; }")
         video_layout.addWidget(self.video_label)
 
@@ -121,18 +122,23 @@ class CameraControlApp(QMainWindow):
         main_layout.addWidget(video_group)
 
         # ===== Results Display Group =====
-        results_group = QGroupBox("Recognition Results & Status Log")
+        results_group = QGroupBox("Recognition Results and Status Log")
         results_layout = QVBoxLayout()
 
         # Results text area
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
-        self.results_text.setMaximumHeight(150)
         self.results_text.setPlaceholderText("QR/Barcode recognition results will appear here...")
+        self.results_text.setMinimumHeight(100)
+        self.results_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         results_layout.addWidget(self.results_text)
 
         results_group.setLayout(results_layout)
         main_layout.addWidget(results_group)
+
+        main_layout.setStretch(0, 0)  # Device selection
+        main_layout.setStretch(1, 3)  # Video display
+        main_layout.setStretch(2, 1)  # Results display
 
         # Status bar
         self.statusBar().showMessage("Ready - Please select a device")
@@ -184,7 +190,6 @@ class CameraControlApp(QMainWindow):
                 device_info = self.device_list.pDevInfo[i]
 
                 # Extract device information
-                # TODO: Decode device name, serial number, and other info properly
                 device_name = f"Device {i}: "
 
                 # Try to get manufacturer and model info
@@ -192,7 +197,8 @@ class CameraControlApp(QMainWindow):
                     manufacturer = device_info.vendorName.decode('utf-8') if device_info.vendorName else "Unknown"
                     model = device_info.modelName.decode('utf-8') if device_info.modelName else "Unknown"
                     serial = device_info.serialNumber.decode('utf-8') if device_info.serialNumber else "Unknown"
-                    device_name += f"{manufacturer} {model} (S/N: {serial})"
+                    ip_address = device_info.DeviceSpecificInfo.gigeDeviceInfo.ipAddress.decode('utf-8') if device_info.DeviceSpecificInfo.gigeDeviceInfo.ipAddress else "N/A"
+                    device_name += f"{manufacturer} {model} (S/N: {serial}) IP: {ip_address}"
                 except:
                     device_name += "Camera Device"
 

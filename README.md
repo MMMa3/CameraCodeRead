@@ -46,7 +46,7 @@ python camera_app.py
 ## TODO List
 
 ### High Priority
-- [ ] Add support for more pixel formats (Bayer, YUV)
+- [x] Add support for more pixel formats (Bayer, YUV)
 - [ ] Implement visual bounding boxes for detected codes
 - [ ] Add camera parameter controls (exposure, gain)
 - [ ] Implement frame rate display
@@ -55,31 +55,10 @@ python camera_app.py
 - [ ] Add result history with timestamps
 - [ ] Implement configuration file for settings
 - [ ] Add zoom and pan controls for video
-- [ ] Support multiple camera connections
 
 ### Low Priority
 - [ ] Add result export functionality
-- [ ] Implement watchdog for connection recovery
-- [ ] Add performance monitoring
 - [ ] Create installer package
-
-## Known Issues
-
-1. **Missing IMV_IsGrabbing**: Check if SDK supports this method
-2. **Pixel Format Support**: Currently only Mono8 and BGR8 tested
-3. **wechat_qrcode Models**: May need model files for QR detection
-
-## Troubleshooting
-
-**No devices found:**
-- Check camera USB/network connection
-- Verify MVSDK installation
-- Check device permissions
-
-**Recognition not working:**
-- Ensure opencv-contrib-python is installed
-- Check if pyzbar is properly installed
-- Verify image quality and lighting
 
 ## License
 

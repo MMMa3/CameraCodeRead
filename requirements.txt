@@ -1,4 +1,5 @@
 # Industrial Camera Control Application - Dependencies
+# Python version at development: 3.9.24
 # =====================================================
 
 # UI Framework
@@ -15,4 +16,4 @@ pyzbar>=0.1.9
 # pillow>=10.0.0
 
 # Note: The MVSDK (Huaray Camera SDK) must be installed separately
-# from the manufacturer's website
+# from the manufacturer's website **to default path**

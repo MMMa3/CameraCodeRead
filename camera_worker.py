@@ -30,8 +30,6 @@ from ctypes import *
 sys.path.append("C:/Program Files/HuarayTech/MV Viewer/Development/Samples/Python/IMV/MVSDK")
 from IMVApi import *
 
-logging.basicConfig(filename='camera_worker.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 class CameraWorker(QThread):
     """
@@ -58,6 +56,8 @@ class CameraWorker(QThread):
             camera: MvCamera instance (already opened)
         """
         super().__init__()
+        logging.basicConfig(filename='camera_worker.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
+        self.logger = logging.getLogger(__name__)
         self.camera = camera
         self.running = False
         self.recognizer = CodeRecognizer()
@@ -163,8 +163,6 @@ class CameraWorker(QThread):
         Returns:
             numpy array (OpenCV image) or None
 
-        TODO: Support more pixel formats or do format conversion
-        TODO: Add color space conversion options
         """
         try:
             # Get frame properties
@@ -173,30 +171,54 @@ class CameraWorker(QThread):
             pixel_format = frame_data.frameInfo.pixelFormat
 
             # Create numpy array from buffer
-            # TODO: Handle different pixel formats properly (A7500CG20 output format: gvspPixelBayRG8--17301513)
+            # TODO: Handle different pixel formats (A7500CG20 output format: gvspPixelBayRG8--17301513) [done, unverified]
             if pixel_format == IMV_EPixelType.gvspPixelMono8:
                 # Mono 8-bit
-                image_array = np.frombuffer(
-                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData),
-                    dtype=np.uint8
-                ).reshape((height, width))
+                image_array = np.ctypeslib.as_array(
+                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width))
 
                 # Convert to BGR for consistency
                 cv_image = cv2.cvtColor(image_array, cv2.COLOR_GRAY2BGR)
-
+    
             elif pixel_format == IMV_EPixelType.gvspPixelBGR8:
                 # BGR 8-bit
-                image_array = np.frombuffer(
-                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData),
-                    dtype=np.uint8
-                ).reshape((height, width, 3))
+                image_array = np.ctypeslib.as_array(
+                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width, 3))
                 cv_image = image_array
 
-            else:
-                # Unsupported format
-                self.status_signal.emit(f"Unsupported pixel format: {pixel_format}")
-                logger.error(f"Unsupported pixel format encountered: {pixel_format}")
-                return None
+            else:  # Use SDK pixel convert function, convert to BGR8 and then convert to OpenCV format
+                logger.debug(f"Trying pixel convert from format {pixel_format} to BGR8")
+
+                stPixelConvertParams = IMV_PixelConvertParam()
+                
+                dst_pixel = IMV_EPixelType.gvspPixelBGR8
+                dst_size = int(width) * int(height) * 3
+                dst_buffer = (c_ubyte * dst_size)()
+                memset(byref(dst_buffer), 0, sizeof(stPixelConvertParams))
+
+                stPixelConvertParams.nWidth = c_uint(width)
+                stPixelConvertParams.nHeight = c_uint(height)
+                stPixelConvertParams.ePixelFormat = c_int(pixel_format)
+                stPixelConvertParams.pSrcData = frame_data.pData
+                stPixelConvertParams.nSrcDataLen = c_uint(frame_data.frameInfo.size)
+                stPixelConvertParams.nPaddingX = c_uint(frame_data.frameInfo.paddingX)
+                stPixelConvertParams.nPaddingY = c_uint(frame_data.frameInfo.paddingY)
+                stPixelConvertParams.eBayerDemosaic = c_int(IMV_EBayerDemosaic.demosaicBilinear if hasattr(IMV_EBayerDemosaic, 'demosaicBilinear') else 1)  # demosaic algorithm, bilinear is the medium choice, if frame rate low, try demosaicNearestNeighbor
+                stPixelConvertParams.eDstPixelFormat = c_int(dst_pixel)
+                stPixelConvertParams.pDstBuf = dst_buffer
+                stPixelConvertParams.nDstBufSize = c_uint(dst_size)
+                stPixelConvertParams.nDstDataLen = c_uint(0)
+
+                # Perform pixel conversion
+                ret = self.camera.IMV_PixelConvert(stPixelConvertParams)
+                if ret != IMV_OK:
+                    self.status_signal.emit(f"Pixel conversion failed: {ret}")
+                    logger.error(f"Pixel conversion failed: {ret}")
+                    return None
+
+                # Create numpy array from converted buffer
+                image_array = np.ctypeslib.as_array(dst_buffer).reshape((height, width, 3))
+                cv_image = image_array
 
             # Release frame buffer
             self.camera.IMV_ReleaseFrame(frame_data)
