@@ -1,0 +1,86 @@
+# Industrial Camera Control Application
+
+A Python application for controlling industrial cameras with real-time QR code and barcode recognition.
+
+## Features
+
+- **Device Discovery**: Automatically find and list connected cameras
+- **Live Preview**: Real-time video stream display
+- **Code Recognition**: Detect QR codes and barcodes in real-time
+- **Thread-Safe Architecture**: UI thread + Worker thread for responsive interface
+
+## Architecture
+
+```
+camera_app.py          - Main UI application (PySide6)
+camera_worker.py       - Worker thread for camera operations
+code_recognition.py    - QR/Barcode detection engine
+MVSDK/                 - Huaray camera SDK wrapper installed in default position
+```
+
+## Installation
+
+1. Install Python dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+2. Ensure Huaray MVSDK is installed (from manufacturer) in **default** position
+
+3. Make Sure installed opencv-contrib-python >= 4.5.0 and wechat QR CNN Model in local project
+
+## Usage
+
+Run the application:
+```bash
+python camera_app.py
+```
+
+**Workflow:**
+1. Click "Refresh Devices" to discover cameras
+2. Select a device from dropdown
+3. Click "Connect" to start streaming
+4. QR/Barcode results appear in the results panel
+5. Click "Disconnect" to stop
+
+## TODO List
+
+### High Priority
+- [ ] Add support for more pixel formats (Bayer, YUV)
+- [ ] Implement visual bounding boxes for detected codes
+- [ ] Add camera parameter controls (exposure, gain)
+- [ ] Implement frame rate display
+
+### Medium Priority
+- [ ] Add result history with timestamps
+- [ ] Implement configuration file for settings
+- [ ] Add zoom and pan controls for video
+- [ ] Support multiple camera connections
+
+### Low Priority
+- [ ] Add result export functionality
+- [ ] Implement watchdog for connection recovery
+- [ ] Add performance monitoring
+- [ ] Create installer package
+
+## Known Issues
+
+1. **Missing IMV_IsGrabbing**: Check if SDK supports this method
+2. **Pixel Format Support**: Currently only Mono8 and BGR8 tested
+3. **wechat_qrcode Models**: May need model files for QR detection
+
+## Troubleshooting
+
+**No devices found:**
+- Check camera USB/network connection
+- Verify MVSDK installation
+- Check device permissions
+
+**Recognition not working:**
+- Ensure opencv-contrib-python is installed
+- Check if pyzbar is properly installed
+- Verify image quality and lighting
+
+## License
+
+Intership use - Intern Project

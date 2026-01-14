@@ -1,0 +1,18 @@
+# Industrial Camera Control Application - Dependencies
+# =====================================================
+
+# UI Framework
+PySide6>=6.5.0
+
+# Image Processing
+opencv-contrib-python>=4.8.0
+numpy>=1.24.0
+
+# Barcode/QR Code Recognition
+pyzbar>=0.1.9
+
+# Optional: For better barcode detection
+# pillow>=10.0.0
+
+# Note: The MVSDK (Huaray Camera SDK) must be installed separately
+# from the manufacturer's website
