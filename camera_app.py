@@ -21,12 +21,13 @@ Workflow:
 """
 
 import sys
+import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox, QMessageBox, QSizePolicy
 )
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import Qt, Slot, QPoint
+from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 import logging
 
 # Import SDK and custom modules
@@ -68,6 +69,9 @@ class CameraControlApp(QMainWindow):
 
         # Frame processing flag to prevent queue buildup
         self.is_processing_frame = False
+
+        # Detection results for annotation overlay
+        self.current_detections = []
 
         # Initialize UI
         self.init_ui()
@@ -165,9 +169,7 @@ class CameraControlApp(QMainWindow):
         1. Calls IMV_EnumDevices to find all connected cameras
         2. Populates the device dropdown with device information
         3. Enables the connect button if devices are found
-
-        TODO: Add support for different interface types (USB, GigE, etc.)
-        TODO: Add error handling for device enumeration failures
+        4. Logs discovery status and errors
         """
         self.log_message("Discovering devices...")
         self.logger.info("Discovering devices...")
@@ -303,6 +305,7 @@ class CameraControlApp(QMainWindow):
             self.worker.error_signal.connect(self.handle_worker_error)
             self.worker.status_signal.connect(self.log_message)
             self.worker.fps_signal.connect(self.update_fps_display)
+            self.worker.detection_signal.connect(self.update_detections)  # New: detection results
 
             # Start the worker thread
             self.worker.start()
@@ -393,6 +396,7 @@ class CameraControlApp(QMainWindow):
             self.connect_btn.setText("Connect")
             self.device_combo.setEnabled(True)
             self.refresh_btn.setEnabled(True)
+            self.current_detections = []  # Clear detection results
             self.video_label.clear()
             self.video_label.setText("No camera connected")
             self.fps_label.setText("FPS: --")
@@ -411,12 +415,10 @@ class CameraControlApp(QMainWindow):
         Update the video display with a new frame.
 
         Uses frame dropping strategy to prevent queue buildup and reduce latency.
+        Overlays detection boxes if available.
 
         Args:
             q_image: QImage object containing the processed frame
-
-        TODO: Add frame rate display
-        TODO: Implement zoom and pan controls
         """
         # Drop frame if still processing previous frame (prevents queue buildup)
         if self.is_processing_frame:
@@ -426,6 +428,10 @@ class CameraControlApp(QMainWindow):
 
         try:
             if q_image is not None:
+                # Draw detections on image if available
+                if self.current_detections:
+                    q_image = self.draw_detections_on_qimage(q_image, self.current_detections)
+
                 # Scale image to fit display while maintaining aspect ratio
                 pixmap = QPixmap.fromImage(q_image)
                 scaled_pixmap = pixmap.scaled(
@@ -444,9 +450,6 @@ class CameraControlApp(QMainWindow):
 
         Args:
             result_text: Decoded QR/Barcode text
-
-        TODO: Add result history with timestamps
-        TODO: Implement result filtering and search
         """
         if result_text:
             self.results_text.append(f"[DETECTED] {result_text}")
@@ -461,6 +464,67 @@ class CameraControlApp(QMainWindow):
             fps: Frames per second value
         """
         self.fps_label.setText(f"FPS: {fps:.1f}")
+
+    @Slot(list)
+    def update_detections(self, detections):
+        """
+        Update detection results for overlay.
+
+        Args:
+            detections: List of detection dicts with 'type', 'text', 'points'
+        """
+        self.current_detections = detections
+
+    def draw_detections_on_qimage(self, q_image, detections):
+        """
+        Draw detection boxes on QImage using QPainter.
+
+        Args:
+            q_image: QImage to draw on
+            detections: List of detection dicts
+
+        Returns:
+            QImage with detections drawn
+        """
+        if not detections:
+            return q_image
+
+        # Create a copy to draw on
+        result_image = q_image.copy()
+
+        # Create painter
+        painter = QPainter(result_image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        pen = QPen()
+        pen.setWidth(12)
+        
+        for detection in detections:
+            det_type = detection.get('type', 'Unknown')
+            points = detection.get('points', None)
+
+            if points is None or len(points) == 0:
+                continue
+
+            # Draw polygon
+            qpoints = [QPoint(int(p[0]), int(p[1])) for p in points]
+
+            # Choose color based on type
+            if det_type == 'QR':
+                pen.setColor(QColor(0, 255, 0))  # Green for QR codes
+                painter.setPen(pen)
+
+                # Draw QR code box
+                painter.drawPolygon(qpoints)
+            else:
+                pen.setColor(QColor(255, 0, 0))  # Red for barcodes
+                painter.setPen(pen)
+
+                # Draw barcode box
+                painter.drawPolygon(qpoints)
+
+        painter.end()
+        return result_image
 
     @Slot(str)
     def handle_worker_error(self, error_message):

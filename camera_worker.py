@@ -21,6 +21,8 @@ import sys
 import numpy as np
 import cv2
 import time
+import queue
+import threading
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 import logging
@@ -42,6 +44,7 @@ class CameraWorker(QThread):
         error_signal: Emits error messages
         status_signal: Emits status messages for logging
         fps_signal: Emits FPS (frames per second) value
+        detection_signal: Emits detection results with position info
     """
 
     # Define signals for thread-safe communication
@@ -50,6 +53,7 @@ class CameraWorker(QThread):
     error_signal = Signal(str)
     status_signal = Signal(str)
     fps_signal = Signal(float)
+    detection_signal = Signal(list)  # Emits list of detections with positions
 
     def __init__(self, camera):
         """
@@ -74,13 +78,18 @@ class CameraWorker(QThread):
         self.running = False
         self.recognizer = CodeRecognizer()
 
+        # Async recognition queue and thread
+        self.recognition_queue = queue.Queue(maxsize=2)  # Limit queue size to avoid memory buildup
+        self.recognition_thread = None
+        self.recognition_running = False
+
         # Frame skip counter for recognition optimization
         self.frame_count = 0
-        self.recognition_interval = 30  # Process every 30th frame (reduced for performance)
+        self.recognition_interval = 10  # Process every 10th frame for async recognition
 
         # Display frame skip counter for UI optimization
         self.display_count = 0
-        self.display_interval = 2  # Emit every 2nd frame for display
+        self.display_interval = 1  # Emit every frame for maximum smoothness with callback
 
         # FPS calculation variables
         self.fps_frame_count = 0
@@ -88,185 +97,191 @@ class CameraWorker(QThread):
         self.fps_update_interval = 30  # Update FPS every 30 frames
 
         # Performance monitoring
-        self.perf_monitoring = True  # Enable performance logging
+        self.perf_monitoring = False  # Disable by default, enable for debugging
+
+        # Callback function reference
+        self.callback_func = None
 
         # TODO: Add configurable recognition interval
 
     def run(self):
         """
-        Main worker thread loop.
+        Main worker thread loop using callback mode.
 
         Workflow:
-        1. Start grabbing frames (IMV_StartGrabbing)
-        2. Loop: Get frame -> Convert -> Recognize -> Emit signals
-        3. Cleanup: Stop grabbing -> Release resources
+        1. Start async recognition thread
+        2. Attach callback to camera
+        3. Start grabbing frames (camera will call callback)
+        4. Wait until stopped
+        5. Cleanup: Stop threads and camera
         """
         self.running = True
 
         try:
-            # Step 1: Start grabbing frames
+            # Step 1: Start async recognition thread
+            self.status_signal.emit("Starting recognition thread...")
+            self.recognition_running = True
+            self.recognition_thread = threading.Thread(target=self._recognition_worker, daemon=True)
+            self.recognition_thread.start()
+            self.logger.info("Recognition thread started")
+
+            # Step 2: Create and attach callback function
+            self.status_signal.emit("Attaching frame callback...")
+            pFrame = POINTER(IMV_Frame)
+            FrameCallbackType = CFUNCTYPE(None, pFrame, c_void_p)
+            self.callback_func = FrameCallbackType(self._frame_callback)
+
+            ret = self.camera.IMV_AttachGrabbing(self.callback_func, None)
+            if ret != IMV_OK:
+                self.error_signal.emit(f"Failed to attach callback. Error code: {ret}")
+                self.logger.error(f"IMV_AttachGrabbing failed with code: {ret}")
+                return
+
+            self.status_signal.emit("Callback attached successfully")
+            self.logger.info("Frame callback attached")
+
+            # Step 3: Start grabbing frames
             self.status_signal.emit("Starting frame acquisition...")
             ret = self.camera.IMV_StartGrabbing()
 
             if ret != IMV_OK:
                 self.error_signal.emit(f"Failed to start grabbing. Error code: {ret}")
-                logging.error(f"IMV_StartGrabbing failed with code: {ret}")
+                self.logger.error(f"IMV_StartGrabbing failed with code: {ret}")
                 return
 
             self.status_signal.emit("Frame acquisition started successfully")
-            logging.info("Camera grabbing started")
+            self.logger.info("Camera grabbing started (callback mode)")
 
-            # Step 2: Main frame processing loop
+            # Step 4: Wait until stopped (callback handles frames)
             while self.running:
-                try:
-                    loop_start = time.time() if self.perf_monitoring else None
-
-                    # Get frame from camera
-                    t1 = time.time()
-                    frame_data = self._get_frame()
-                    if self.perf_monitoring and self.frame_count % 30 == 0:
-                        self.logger.info(f"[PERF] Frame acquisition: {(time.time()-t1)*1000:.1f}ms")
-
-                    if frame_data is None:
-                        continue
-
-                    # Convert to RGB format (optimized for display)
-                    t2 = time.time()
-                    rgb_image = self._convert_to_opencv(frame_data)
-                    if self.perf_monitoring and self.frame_count % 30 == 0:
-                        self.logger.info(f"[PERF] RGB conversion: {(time.time()-t2)*1000:.1f}ms")
-
-                    if rgb_image is None:
-                        continue
-
-                    # Perform recognition (with frame skipping)
-                    self.frame_count += 1
-                    if self.frame_count % self.recognition_interval == 0:
-                        t3 = time.time()
-                        # Convert RGB to BGR for recognition (only when needed)
-                        bgr_image = rgb_image[:, :, ::-1]
-                        decoded_text = self.recognizer.detect_codes(bgr_image)
-                        recog_time = (time.time()-t3)*1000
-                        self.logger.info(f"[PERF] Recognition: {recog_time:.1f}ms")
-                        if decoded_text:
-                            self.result_signal.emit(decoded_text)
-
-                    # Convert to QImage and emit for display (with frame skipping)
-                    self.display_count += 1
-                    if self.display_count % self.display_interval == 0:
-                        t4 = time.time()
-                        q_image = self._convert_to_qimage(rgb_image)
-                        if q_image is not None:
-                            self.image_signal.emit(q_image)
-                        if self.perf_monitoring and self.frame_count % 30 == 0:
-                            self.logger.info(f"[PERF] QImage conversion: {(time.time()-t4)*1000:.1f}ms")
-
-                    # Log total loop time
-                    if self.perf_monitoring and loop_start and self.frame_count % 30 == 0:
-                        loop_time = (time.time() - loop_start) * 1000
-                        self.logger.info(f"[PERF] Total loop time: {loop_time:.1f}ms")
-                        self.logger.info(f"[PERF] Theoretical max FPS: {1000/loop_time:.1f}")
-
-                    # Calculate and emit FPS
-                    self.fps_frame_count += 1
-                    if self.fps_frame_count >= self.fps_update_interval:
-                        elapsed_time = time.time() - self.fps_start_time
-                        fps = self.fps_frame_count / elapsed_time
-                        self.fps_signal.emit(fps)
-                        # Reset counters
-                        self.fps_frame_count = 0
-                        self.fps_start_time = time.time()
-
-                except Exception as e:
-                    self.status_signal.emit(f"Frame processing error: {str(e)}")
-                    logging.error(f"Frame processing exception: {str(e)}")
-                    continue
+                self.msleep(100)  # Sleep to avoid busy waiting
 
         except Exception as e:
             self.error_signal.emit(f"Critical error in worker thread: {str(e)}")
+            self.logger.exception("Critical error in worker thread")
 
         finally:
-            # Step 3: Cleanup - Always executed
+            # Step 5: Cleanup - Always executed
             self._cleanup()
 
-    def _get_frame(self):
+    def _frame_callback(self, pFrame, pUser):
         """
-        Get a frame from the camera with latest frame strategy.
+        Frame callback function called by camera SDK.
 
-        Clears the buffer to get the most recent frame, reducing latency.
+        This function is called from camera SDK thread.
 
-        Returns:
-            IMV_Frame object or None on error
-
-        TODO: Add timeout configuration
+        Args:
+            pFrame: Pointer to IMV_Frame
+            pUser: User data (not used)
         """
-        # Clear buffer by reading all pending frames with short timeout
-        frame = IMV_Frame()
-        latest_frame = None
+        try:
+            if pFrame is None:
+                return
 
-        # Try to drain the buffer (max 10 frames to avoid infinite loop)
-        for _ in range(10):
-            ret = self.camera.IMV_GetFrame(frame, 50)  # Short 50ms timeout
-            if ret == IMV_OK:
-                latest_frame = frame
-                frame = IMV_Frame()  # Prepare for next read
-            else:
-                break  # No more frames in buffer
+            # Get frame data
+            frame = cast(pFrame, POINTER(IMV_Frame)).contents
 
-        # If we got at least one frame, return the latest
-        if latest_frame is not None:
-            return latest_frame
+            # Convert to RGB format
+            rgb_image = self._convert_frame_to_rgb(frame)
 
-        # Otherwise, wait for a new frame with normal timeout
-        ret = self.camera.IMV_GetFrame(frame, 1000)  # 1000ms timeout
+            if rgb_image is None:
+                return
 
-        if ret != IMV_OK:  # IMV_OK defined in IMVADefines
-            self.status_signal.emit(f"Frame acquisition error: {ret}")
-            self.logger.error(f"IMV_GetFrame failed with code: {ret}")
-            return None
-        self.logger.debug("Frame acquired successfully")
-        return frame
+            # Emit for display (fast, no blocking)
+            self.frame_count += 1
+            self.display_count += 1
 
-    def _convert_to_opencv(self, frame_data):
+            if self.display_count % self.display_interval == 0:
+                q_image = self._convert_to_qimage(rgb_image)
+                if q_image is not None:
+                    self.image_signal.emit(q_image)
+
+            # Queue for async recognition
+            if self.frame_count % self.recognition_interval == 0:
+                try:
+                    # Non-blocking put, discard if queue is full
+                    self.recognition_queue.put_nowait(rgb_image.copy())
+                except queue.Full:
+                    self.logger.debug("Recognition queue full, skipping frame")
+
+            # Calculate and emit FPS
+            self.fps_frame_count += 1
+            if self.fps_frame_count >= self.fps_update_interval:
+                elapsed_time = time.time() - self.fps_start_time
+                fps = self.fps_frame_count / elapsed_time
+                self.fps_signal.emit(fps)
+                # Reset counters
+                self.fps_frame_count = 0
+                self.fps_start_time = time.time()
+
+        except Exception as e:
+            self.logger.error(f"Callback error: {str(e)}")
+
+    def _recognition_worker(self):
         """
-        Convert SDK frame buffer to RGB format (numpy array).
+        Async recognition worker thread.
 
-        Note: Returns RGB format (not BGR) to avoid redundant color conversion
-        for display. Recognition will convert to BGR only when needed.
+        Processes frames from recognition queue without blocking display.
+        """
+        self.logger.info("Recognition worker started")
+
+        while self.recognition_running:
+            try:
+                # Wait for frame with timeout
+                rgb_image = self.recognition_queue.get(timeout=0.5)
+
+                # Convert RGB to BGR for recognition
+                bgr_image = rgb_image[:, :, ::-1]
+
+                # Detect codes with positions
+                decoded_text, detections = self.recognizer.detect_codes_with_positions(bgr_image)
+
+                # Emit results
+                if decoded_text:
+                    self.result_signal.emit(decoded_text)
+
+                self.detection_signal.emit(detections)
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.logger.error(f"Recognition worker error: {str(e)}")
+
+        self.logger.info("Recognition worker stopped")
+
+    def _convert_frame_to_rgb(self, frame_data):
+        """
+        Convert SDK frame to RGB format in callback.
+
+        Similar to _convert_to_opencv but optimized for callback use.
 
         Args:
             frame_data: IMV_Frame object
 
         Returns:
             numpy array (RGB image) or None
-
         """
         try:
-            # Get frame properties
             width = frame_data.frameInfo.width
             height = frame_data.frameInfo.height
             pixel_format = frame_data.frameInfo.pixelFormat
 
-            # Create numpy array from buffer
+            # Handle different pixel formats
             if pixel_format == IMV_EPixelType.gvspPixelMono8:
-                # Mono 8-bit
                 image_array = np.ctypeslib.as_array(
-                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width))
-
-                # Convert to RGB for consistency
+                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)
+                ).reshape((height, width))
                 rgb_image = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
 
             elif pixel_format == IMV_EPixelType.gvspPixelBGR8:
-                # BGR 8-bit - convert to RGB using fast numpy slicing
                 image_array = np.ctypeslib.as_array(
-                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width, 3))
-                rgb_image = image_array[:, :, ::-1]  # Fast BGR to RGB conversion
+                    (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)
+                ).reshape((height, width, 3))
+                rgb_image = image_array[:, :, ::-1]  # Fast BGR to RGB
 
-            else:  # Use SDK pixel convert function, convert to BGR8 then to RGB
-                self.logger.debug(f"Trying pixel convert from format {pixel_format} to BGR8")
-
+            else:
+                # Use SDK conversion
                 stPixelConvertParams = IMV_PixelConvertParam()
-
                 dst_pixel = IMV_EPixelType.gvspPixelBGR8
                 dst_size = int(width) * int(height) * 3
                 dst_buffer = (c_ubyte * dst_size)()
@@ -279,32 +294,147 @@ class CameraWorker(QThread):
                 stPixelConvertParams.nSrcDataLen = c_uint(frame_data.frameInfo.size)
                 stPixelConvertParams.nPaddingX = c_uint(frame_data.frameInfo.paddingX)
                 stPixelConvertParams.nPaddingY = c_uint(frame_data.frameInfo.paddingY)
-                stPixelConvertParams.eBayerDemosaic = c_int(IMV_EBayerDemosaic.demosaicBilinear if hasattr(IMV_EBayerDemosaic, 'demosaicBilinear') else 1)
+                stPixelConvertParams.eBayerDemosaic = c_int(
+                    IMV_EBayerDemosaic.demosaicBilinear if hasattr(IMV_EBayerDemosaic, 'demosaicBilinear') else 1
+                )
                 stPixelConvertParams.eDstPixelFormat = c_int(dst_pixel)
                 stPixelConvertParams.pDstBuf = dst_buffer
                 stPixelConvertParams.nDstBufSize = c_uint(dst_size)
                 stPixelConvertParams.nDstDataLen = c_uint(0)
 
-                # Perform pixel conversion
                 ret = self.camera.IMV_PixelConvert(stPixelConvertParams)
                 if ret != IMV_OK:
-                    self.status_signal.emit(f"Pixel conversion failed: {ret}")
                     self.logger.error(f"Pixel conversion failed: {ret}")
                     return None
 
-                # Create numpy array and convert BGR to RGB using fast slicing
                 image_array = np.ctypeslib.as_array(dst_buffer).reshape((height, width, 3))
-                rgb_image = image_array[:, :, ::-1]  # Fast BGR to RGB conversion, change memory reading order rather than data copy
+                rgb_image = image_array[:, :, ::-1]  # BGR to RGB
 
-            # Release frame buffer
+            # Release frame buffer (important!)
             self.camera.IMV_ReleaseFrame(frame_data)
-            self.logger.debug("Released frame buffer back to SDK")
 
             return rgb_image
 
         except Exception as e:
-            self.status_signal.emit(f"Image conversion error: {str(e)}")
+            self.logger.error(f"Frame conversion error: {str(e)}")
             return None
+        
+# Deprecated method:
+#     def _get_frame(self):
+#         """
+#         Get a frame from the camera with latest frame strategy.
+
+#         Clears the buffer to get the most recent frame, reducing latency.
+
+#         Returns:
+#             IMV_Frame object or None on error
+#         """
+#         # Clear buffer by reading all pending frames with short timeout
+#         frame = IMV_Frame()
+#         latest_frame = None
+
+#         # Try to drain the buffer (max 10 frames to avoid infinite loop)
+#         for _ in range(10):
+#             ret = self.camera.IMV_GetFrame(frame, 50)  # Short 50ms timeout
+#             if ret == IMV_OK:
+#                 latest_frame = frame
+#                 frame = IMV_Frame()  # Prepare for next read
+#             else:
+#                 break  # No more frames in buffer
+
+#         # If we got at least one frame, return the latest
+#         if latest_frame is not None:
+#             return latest_frame
+
+#         # Otherwise, wait for a new frame with normal timeout
+#         ret = self.camera.IMV_GetFrame(frame, 1000)  # 1000ms timeout
+
+#         if ret != IMV_OK:  # IMV_OK defined in IMVADefines
+#             self.status_signal.emit(f"Frame acquisition error: {ret}")
+#             self.logger.error(f"IMV_GetFrame failed with code: {ret}")
+#             return None
+#         self.logger.debug("Frame acquired successfully")
+#         return frame
+
+# Deprecated method:
+#     def _convert_to_opencv(self, frame_data):
+#         """
+#         Convert SDK frame buffer to RGB format (numpy array).
+
+#         Note: Returns RGB format (not BGR) to avoid redundant color conversion
+#         for display. Recognition will convert to BGR only when needed.
+
+#         Args:
+#             frame_data: IMV_Frame object
+
+#         Returns:
+#             numpy array (RGB image) or None
+
+#         """
+#         try:
+#             # Get frame properties
+#             width = frame_data.frameInfo.width
+#             height = frame_data.frameInfo.height
+#             pixel_format = frame_data.frameInfo.pixelFormat
+
+#             # Create numpy array from buffer
+#             if pixel_format == IMV_EPixelType.gvspPixelMono8:
+#                 # Mono 8-bit
+#                 image_array = np.ctypeslib.as_array(
+#                     (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width))
+
+#                 # Convert to RGB for consistency
+#                 rgb_image = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
+
+#             elif pixel_format == IMV_EPixelType.gvspPixelBGR8:
+#                 # BGR 8-bit - convert to RGB using fast numpy slicing
+#                 image_array = np.ctypeslib.as_array(
+#                     (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width, 3))
+#                 rgb_image = image_array[:, :, ::-1]  # Fast BGR to RGB conversion
+
+#             else:  # Use SDK pixel convert function, convert to BGR8 then to RGB
+#                 self.logger.debug(f"Trying pixel convert from format {pixel_format} to BGR8")
+
+#                 stPixelConvertParams = IMV_PixelConvertParam()
+
+#                 dst_pixel = IMV_EPixelType.gvspPixelBGR8
+#                 dst_size = int(width) * int(height) * 3
+#                 dst_buffer = (c_ubyte * dst_size)()
+#                 memset(byref(dst_buffer), 0, sizeof(stPixelConvertParams))
+
+#                 stPixelConvertParams.nWidth = c_uint(width)
+#                 stPixelConvertParams.nHeight = c_uint(height)
+#                 stPixelConvertParams.ePixelFormat = c_int(pixel_format)
+#                 stPixelConvertParams.pSrcData = frame_data.pData
+#                 stPixelConvertParams.nSrcDataLen = c_uint(frame_data.frameInfo.size)
+#                 stPixelConvertParams.nPaddingX = c_uint(frame_data.frameInfo.paddingX)
+#                 stPixelConvertParams.nPaddingY = c_uint(frame_data.frameInfo.paddingY)
+#                 stPixelConvertParams.eBayerDemosaic = c_int(IMV_EBayerDemosaic.demosaicBilinear if hasattr(IMV_EBayerDemosaic, 'demosaicBilinear') else 1)
+#                 stPixelConvertParams.eDstPixelFormat = c_int(dst_pixel)
+#                 stPixelConvertParams.pDstBuf = dst_buffer
+#                 stPixelConvertParams.nDstBufSize = c_uint(dst_size)
+#                 stPixelConvertParams.nDstDataLen = c_uint(0)
+
+#                 # Perform pixel conversion
+#                 ret = self.camera.IMV_PixelConvert(stPixelConvertParams)
+#                 if ret != IMV_OK:
+#                     self.status_signal.emit(f"Pixel conversion failed: {ret}")
+#                     self.logger.error(f"Pixel conversion failed: {ret}")
+#                     return None
+
+#                 # Create numpy array and convert BGR to RGB using fast slicing
+#                 image_array = np.ctypeslib.as_array(dst_buffer).reshape((height, width, 3))
+#                 rgb_image = image_array[:, :, ::-1]  # Fast BGR to RGB conversion, change memory reading order rather than data copy
+
+#             # Release frame buffer
+#             self.camera.IMV_ReleaseFrame(frame_data)
+#             self.logger.debug("Released frame buffer back to SDK")
+
+#             return rgb_image
+
+#         except Exception as e:
+#             self.status_signal.emit(f"Image conversion error: {str(e)}")
+#             return None
 
     def _convert_to_qimage(self, rgb_image):
         """
@@ -342,15 +472,22 @@ class CameraWorker(QThread):
         """
         self.status_signal.emit("Stop signal received")
         self.running = False
+        self.recognition_running = False  # Stop recognition thread
 
     def _cleanup(self):
         """
-        Cleanup camera resources.
+        Cleanup camera resources and threads.
 
         Always called in finally block to ensure proper resource release.
         """
         try:
             self.status_signal.emit("Cleaning up camera resources...")
+
+            # Stop recognition thread
+            if self.recognition_thread and self.recognition_thread.is_alive():
+                self.recognition_running = False
+                self.recognition_thread.join(timeout=2.0)
+                self.status_signal.emit("Recognition thread stopped")
 
             # Stop grabbing
             if self.camera.IMV_IsGrabbing():

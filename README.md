@@ -47,13 +47,12 @@ python camera_app.py
 
 ### High Priority
 - [x] Add support for more pixel formats (Bayer, YUV)
-- [ ] High Delay and chopping animation
-- [ ] Implement visual bounding boxes for detected codes
+- [x] High Delay and chopping animation
+- [x] Implement visual bounding boxes for detected codes
 - [ ] Add camera parameter controls (exposure, gain)
 - [x] Implement frame rate display
 
 ### Medium Priority
-- [ ] Add result history with timestamps
 - [ ] Implement configuration file for settings
 - [ ] Add zoom and pan controls for video
 
