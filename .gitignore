@@ -1,4 +1,7 @@
 # 日志文件
 *.log
+# 缓存文件
 __pycache__/
+# 无用文件夹
 MVSDK/
+demo/

@@ -20,6 +20,7 @@ Thread Safety:
 import sys
 import numpy as np
 import cv2
+import time
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 import logging
@@ -40,6 +41,7 @@ class CameraWorker(QThread):
         result_signal: Emits decoded QR/Barcode text
         error_signal: Emits error messages
         status_signal: Emits status messages for logging
+        fps_signal: Emits FPS (frames per second) value
     """
 
     # Define signals for thread-safe communication
@@ -47,6 +49,7 @@ class CameraWorker(QThread):
     result_signal = Signal(str)
     error_signal = Signal(str)
     status_signal = Signal(str)
+    fps_signal = Signal(float)
 
     def __init__(self, camera):
         """
@@ -56,18 +59,38 @@ class CameraWorker(QThread):
             camera: MvCamera instance (already opened)
         """
         super().__init__()
-        logging.basicConfig(filename='camera_worker.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
+        # Create a dedicated logger for this module
         self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+
+        # Create file handler if not already exists
+        if not self.logger.handlers:
+            file_handler = logging.FileHandler('camera_worker.log', mode='w')
+            file_handler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
         self.camera = camera
         self.running = False
         self.recognizer = CodeRecognizer()
 
         # Frame skip counter for recognition optimization
         self.frame_count = 0
-        self.recognition_interval = 3  # Process every 3rd frame
+        self.recognition_interval = 30  # Process every 30th frame (reduced for performance)
+
+        # Display frame skip counter for UI optimization
+        self.display_count = 0
+        self.display_interval = 2  # Emit every 2nd frame for display
+
+        # FPS calculation variables
+        self.fps_frame_count = 0
+        self.fps_start_time = time.time()
+        self.fps_update_interval = 30  # Update FPS every 30 frames
+
+        # Performance monitoring
+        self.perf_monitoring = True  # Enable performance logging
 
         # TODO: Add configurable recognition interval
-        # TODO: Add frame rate monitoring
 
     def run(self):
         """
@@ -96,30 +119,63 @@ class CameraWorker(QThread):
             # Step 2: Main frame processing loop
             while self.running:
                 try:
+                    loop_start = time.time() if self.perf_monitoring else None
+
                     # Get frame from camera
+                    t1 = time.time()
                     frame_data = self._get_frame()
+                    if self.perf_monitoring and self.frame_count % 30 == 0:
+                        self.logger.info(f"[PERF] Frame acquisition: {(time.time()-t1)*1000:.1f}ms")
 
                     if frame_data is None:
                         continue
 
-                    # Convert to OpenCV format
-                    cv_image = self._convert_to_opencv(frame_data)
+                    # Convert to RGB format (optimized for display)
+                    t2 = time.time()
+                    rgb_image = self._convert_to_opencv(frame_data)
+                    if self.perf_monitoring and self.frame_count % 30 == 0:
+                        self.logger.info(f"[PERF] RGB conversion: {(time.time()-t2)*1000:.1f}ms")
 
-                    if cv_image is None:
+                    if rgb_image is None:
                         continue
 
                     # Perform recognition (with frame skipping)
                     self.frame_count += 1
                     if self.frame_count % self.recognition_interval == 0:
-                        decoded_text = self.recognizer.detect_codes(cv_image)
+                        t3 = time.time()
+                        # Convert RGB to BGR for recognition (only when needed)
+                        bgr_image = rgb_image[:, :, ::-1]
+                        decoded_text = self.recognizer.detect_codes(bgr_image)
+                        recog_time = (time.time()-t3)*1000
+                        self.logger.info(f"[PERF] Recognition: {recog_time:.1f}ms")
                         if decoded_text:
                             self.result_signal.emit(decoded_text)
 
-                    # Convert to QImage and emit for display
-                    q_image = self._convert_to_qimage(cv_image)
-                    if q_image is not None:
-                        logger.debug("Emitting image signal to UI thread")
-                        self.image_signal.emit(q_image)
+                    # Convert to QImage and emit for display (with frame skipping)
+                    self.display_count += 1
+                    if self.display_count % self.display_interval == 0:
+                        t4 = time.time()
+                        q_image = self._convert_to_qimage(rgb_image)
+                        if q_image is not None:
+                            self.image_signal.emit(q_image)
+                        if self.perf_monitoring and self.frame_count % 30 == 0:
+                            self.logger.info(f"[PERF] QImage conversion: {(time.time()-t4)*1000:.1f}ms")
+
+                    # Log total loop time
+                    if self.perf_monitoring and loop_start and self.frame_count % 30 == 0:
+                        loop_time = (time.time() - loop_start) * 1000
+                        self.logger.info(f"[PERF] Total loop time: {loop_time:.1f}ms")
+                        self.logger.info(f"[PERF] Theoretical max FPS: {1000/loop_time:.1f}")
+
+                    # Calculate and emit FPS
+                    self.fps_frame_count += 1
+                    if self.fps_frame_count >= self.fps_update_interval:
+                        elapsed_time = time.time() - self.fps_start_time
+                        fps = self.fps_frame_count / elapsed_time
+                        self.fps_signal.emit(fps)
+                        # Reset counters
+                        self.fps_frame_count = 0
+                        self.fps_start_time = time.time()
 
                 except Exception as e:
                     self.status_signal.emit(f"Frame processing error: {str(e)}")
@@ -135,33 +191,54 @@ class CameraWorker(QThread):
 
     def _get_frame(self):
         """
-        Get a frame from the camera.
+        Get a frame from the camera with latest frame strategy.
+
+        Clears the buffer to get the most recent frame, reducing latency.
 
         Returns:
             IMV_Frame object or None on error
 
         TODO: Add timeout configuration
-        TODO: Implement frame buffer management
         """
-        frame = IMV_Frame()  # IMV_Frame defined in IMVADefines
+        # Clear buffer by reading all pending frames with short timeout
+        frame = IMV_Frame()
+        latest_frame = None
+
+        # Try to drain the buffer (max 10 frames to avoid infinite loop)
+        for _ in range(10):
+            ret = self.camera.IMV_GetFrame(frame, 50)  # Short 50ms timeout
+            if ret == IMV_OK:
+                latest_frame = frame
+                frame = IMV_Frame()  # Prepare for next read
+            else:
+                break  # No more frames in buffer
+
+        # If we got at least one frame, return the latest
+        if latest_frame is not None:
+            return latest_frame
+
+        # Otherwise, wait for a new frame with normal timeout
         ret = self.camera.IMV_GetFrame(frame, 1000)  # 1000ms timeout
 
         if ret != IMV_OK:  # IMV_OK defined in IMVADefines
             self.status_signal.emit(f"Frame acquisition error: {ret}")
-            logger.error(f"IMV_GetFrame failed with code: {ret}")
+            self.logger.error(f"IMV_GetFrame failed with code: {ret}")
             return None
-        logger.debug("Frame acquired successfully")
+        self.logger.debug("Frame acquired successfully")
         return frame
 
     def _convert_to_opencv(self, frame_data):
         """
-        Convert SDK frame buffer to OpenCV (numpy) format.
+        Convert SDK frame buffer to RGB format (numpy array).
+
+        Note: Returns RGB format (not BGR) to avoid redundant color conversion
+        for display. Recognition will convert to BGR only when needed.
 
         Args:
             frame_data: IMV_Frame object
 
         Returns:
-            numpy array (OpenCV image) or None
+            numpy array (RGB image) or None
 
         """
         try:
@@ -171,26 +248,25 @@ class CameraWorker(QThread):
             pixel_format = frame_data.frameInfo.pixelFormat
 
             # Create numpy array from buffer
-            # TODO: Handle different pixel formats (A7500CG20 output format: gvspPixelBayRG8--17301513) [done, unverified]
             if pixel_format == IMV_EPixelType.gvspPixelMono8:
                 # Mono 8-bit
                 image_array = np.ctypeslib.as_array(
                     (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width))
 
-                # Convert to BGR for consistency
-                cv_image = cv2.cvtColor(image_array, cv2.COLOR_GRAY2BGR)
-    
+                # Convert to RGB for consistency
+                rgb_image = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
+
             elif pixel_format == IMV_EPixelType.gvspPixelBGR8:
-                # BGR 8-bit
+                # BGR 8-bit - convert to RGB using fast numpy slicing
                 image_array = np.ctypeslib.as_array(
                     (c_ubyte * frame_data.frameInfo.size).from_address(frame_data.pData)).reshape((height, width, 3))
-                cv_image = image_array
+                rgb_image = image_array[:, :, ::-1]  # Fast BGR to RGB conversion
 
-            else:  # Use SDK pixel convert function, convert to BGR8 and then convert to OpenCV format
-                logger.debug(f"Trying pixel convert from format {pixel_format} to BGR8")
+            else:  # Use SDK pixel convert function, convert to BGR8 then to RGB
+                self.logger.debug(f"Trying pixel convert from format {pixel_format} to BGR8")
 
                 stPixelConvertParams = IMV_PixelConvertParam()
-                
+
                 dst_pixel = IMV_EPixelType.gvspPixelBGR8
                 dst_size = int(width) * int(height) * 3
                 dst_buffer = (c_ubyte * dst_size)()
@@ -203,7 +279,7 @@ class CameraWorker(QThread):
                 stPixelConvertParams.nSrcDataLen = c_uint(frame_data.frameInfo.size)
                 stPixelConvertParams.nPaddingX = c_uint(frame_data.frameInfo.paddingX)
                 stPixelConvertParams.nPaddingY = c_uint(frame_data.frameInfo.paddingY)
-                stPixelConvertParams.eBayerDemosaic = c_int(IMV_EBayerDemosaic.demosaicBilinear if hasattr(IMV_EBayerDemosaic, 'demosaicBilinear') else 1)  # demosaic algorithm, bilinear is the medium choice, if frame rate low, try demosaicNearestNeighbor
+                stPixelConvertParams.eBayerDemosaic = c_int(IMV_EBayerDemosaic.demosaicBilinear if hasattr(IMV_EBayerDemosaic, 'demosaicBilinear') else 1)
                 stPixelConvertParams.eDstPixelFormat = c_int(dst_pixel)
                 stPixelConvertParams.pDstBuf = dst_buffer
                 stPixelConvertParams.nDstBufSize = c_uint(dst_size)
@@ -213,49 +289,48 @@ class CameraWorker(QThread):
                 ret = self.camera.IMV_PixelConvert(stPixelConvertParams)
                 if ret != IMV_OK:
                     self.status_signal.emit(f"Pixel conversion failed: {ret}")
-                    logger.error(f"Pixel conversion failed: {ret}")
+                    self.logger.error(f"Pixel conversion failed: {ret}")
                     return None
 
-                # Create numpy array from converted buffer
+                # Create numpy array and convert BGR to RGB using fast slicing
                 image_array = np.ctypeslib.as_array(dst_buffer).reshape((height, width, 3))
-                cv_image = image_array
+                rgb_image = image_array[:, :, ::-1]  # Fast BGR to RGB conversion, change memory reading order rather than data copy
 
             # Release frame buffer
             self.camera.IMV_ReleaseFrame(frame_data)
-            logger.debug("Released frame buffer back to SDK")
+            self.logger.debug("Released frame buffer back to SDK")
 
-            return cv_image
+            return rgb_image
 
         except Exception as e:
             self.status_signal.emit(f"Image conversion error: {str(e)}")
             return None
 
-    def _convert_to_qimage(self, cv_image):
+    def _convert_to_qimage(self, rgb_image):
         """
-        Convert OpenCV image to QImage for Qt display.
+        Convert RGB image to QImage for Qt display.
 
         Args:
-            cv_image: OpenCV image (numpy array)
+            rgb_image: RGB image (numpy array)
 
         Returns:
             QImage object or None
         """
         try:
-            height, width, channels = cv_image.shape
+            height, width, channels = rgb_image.shape
             bytes_per_line = channels * width
 
-            # Convert BGR to RGB for Qt
-            rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-
+            # Image is already in RGB format, no conversion needed
+            # Use tobytes() to create independent data copy (faster than .copy())
             q_image = QImage(
-                rgb_image.data,
+                rgb_image.tobytes(),
                 width,
                 height,
                 bytes_per_line,
                 QImage.Format.Format_RGB888
             )
 
-            return q_image.copy()  # Create a copy to avoid data corruption
+            return q_image  # No need for .copy() as tobytes() already creates a copy
 
         except Exception as e:
             self.status_signal.emit(f"QImage conversion error: {str(e)}")

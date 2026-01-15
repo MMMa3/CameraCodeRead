@@ -19,14 +19,25 @@ import cv2
 import numpy as np
 import logging
 
-# TODO: Install these libraries: pip install opencv-contrib-python pyzbar
 try:
     from pyzbar import pyzbar
     PYZBAR_AVAILABLE = True
 except ImportError:
     PYZBAR_AVAILABLE = False
-    logging.basicConfig(filename='code_recognition.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
+
+# Configure module logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create file handler if not already exists
+if not logger.handlers:
+    file_handler = logging.FileHandler('code_recognition.log', mode='w')
+    file_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+if not PYZBAR_AVAILABLE:
     logger.warning("pyzbar not available. Barcode detection disabled.")
 
 
@@ -43,7 +54,6 @@ class CodeRecognizer:
         """
         Initialize recognition engines.
 
-        TODO: Add model path configuration for wechat_qrcode
         TODO: Add barcode type filtering options
         """
         # Initialize QR code detector
@@ -55,8 +65,6 @@ class CodeRecognizer:
             self.qr_available = True
         except Exception as e:
             self.qr_available = False
-            logging.basicConfig(filename='code_recognition.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s')
-            logger = logging.getLogger(__name__)
             logger.warning(f"OpenCV wechat_qrcode not available. QR detection disabled: {e}")
 
         self.last_result = None  # For deduplication
@@ -72,7 +80,7 @@ class CodeRecognizer:
             str: Decoded text (comma-separated if multiple codes)
             None: If no codes detected
 
-        TODO: Return structured data (type, position, confidence)
+        TODO: Return structured data (type, **position**, confidence)
         TODO: Add result filtering by confidence threshold
         """
         results = []
@@ -141,7 +149,8 @@ class CodeRecognizer:
                 barcode_data = barcode.data.decode('utf-8')
                 barcode_type = barcode.type
 
-                results.append(f"{barcode_type}:{barcode_data}")
+                if barcode_type != "QRCODE":  # Avoid duplicates with QR detection
+                    results.append(f"{barcode_type}:{barcode_data}")
 
             return results
 

@@ -50,7 +50,12 @@ class CameraControlApp(QMainWindow):
     def __init__(self):
         super().__init__()
         # Logger
-        logging.basicConfig(filename='camera_app.log', filemode='w', format='%(asctime)s - %(levelname)s - %(message)s')
+        logging.basicConfig(
+            filename='camera_app.log',
+            filemode='w',
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            level=logging.INFO
+        )
         self.logger = logging.getLogger(__name__)
         self.setWindowTitle("Industrial Camera Control - QR/Barcode Recognition")
         self.setGeometry(100, 100, 1200, 800)
@@ -60,6 +65,9 @@ class CameraControlApp(QMainWindow):
         self.worker = None
         self.device_list = None
         self.selected_device_index = -1
+
+        # Frame processing flag to prevent queue buildup
+        self.is_processing_frame = False
 
         # Initialize UI
         self.init_ui()
@@ -112,11 +120,17 @@ class CameraControlApp(QMainWindow):
 
         # Video display label
         self.video_label = QLabel("No camera connected")
-        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter) # Center alignment, original parameter:"Qt.AlignCenter"
+        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_label.setMinimumSize(800, 600)
         self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.video_label.setStyleSheet("QLabel { background-color: #2b2b2b; color: white; }")
         video_layout.addWidget(self.video_label)
+
+        # FPS display label
+        self.fps_label = QLabel("FPS: --")
+        self.fps_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.fps_label.setStyleSheet("QLabel { color: #00ff00; font-weight: bold; padding: 5px; }")
+        video_layout.addWidget(self.fps_label)
 
         video_group.setLayout(video_layout)
         main_layout.addWidget(video_group)
@@ -257,7 +271,7 @@ class CameraControlApp(QMainWindow):
             self.logger.info("Creating device handle")
             device_info = self.device_list.pDevInfo[self.selected_device_index]
             ret = self.camera.IMV_CreateHandle(
-                IMV_ECreateHandleMode.modeByIndex,  # TODO: Use modeByIPAddress instead
+                IMV_ECreateHandleMode.modeByIndex,
                 byref(c_uint(self.selected_device_index))
             )
 
@@ -288,6 +302,7 @@ class CameraControlApp(QMainWindow):
             self.worker.result_signal.connect(self.update_recognition_results)
             self.worker.error_signal.connect(self.handle_worker_error)
             self.worker.status_signal.connect(self.log_message)
+            self.worker.fps_signal.connect(self.update_fps_display)
 
             # Start the worker thread
             self.worker.start()
@@ -334,11 +349,18 @@ class CameraControlApp(QMainWindow):
             if self.worker is not None:
                 self.log_message("Step 1/3: Stopping video stream...")
                 self.logger.info("Stopping worker thread")
+
+                # Disconnect signals first to prevent queued signals from updating UI
+                self.worker.image_signal.disconnect()
+                self.worker.result_signal.disconnect()
+                self.worker.error_signal.disconnect()
+                self.worker.status_signal.disconnect()
+
                 self.worker.stop()
                 self.worker.wait(5000)  # Wait up to 5 seconds for thread to finish
 
                 if self.worker.isRunning():
-                    self.log_message("WARNING: Worker thread did not stop gracefully")
+                    self.log_message("WARNING: Worker thread kept running after stop request")
                     self.worker.terminate()
                     self.worker.wait()
 
@@ -371,8 +393,9 @@ class CameraControlApp(QMainWindow):
             self.connect_btn.setText("Connect")
             self.device_combo.setEnabled(True)
             self.refresh_btn.setEnabled(True)
+            self.video_label.clear()
             self.video_label.setText("No camera connected")
-            self.video_label.setPixmap(QPixmap())
+            self.fps_label.setText("FPS: --")
 
             self.log_message("Camera disconnected successfully")
             self.statusBar().showMessage("Disconnected - Ready to connect")
@@ -387,21 +410,32 @@ class CameraControlApp(QMainWindow):
         """
         Update the video display with a new frame.
 
+        Uses frame dropping strategy to prevent queue buildup and reduce latency.
+
         Args:
             q_image: QImage object containing the processed frame
 
         TODO: Add frame rate display
         TODO: Implement zoom and pan controls
         """
-        if q_image is not None:
-            # Scale image to fit display while maintaining aspect ratio
-            pixmap = QPixmap.fromImage(q_image)
-            scaled_pixmap = pixmap.scaled(
-                self.video_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio, # Original parameter:Qt.KeepAspectRatio
-                Qt.TransformationMode.SmoothTransformation # Original parameter:Qt.SmoothTransformation
-            )
-            self.video_label.setPixmap(scaled_pixmap)
+        # Drop frame if still processing previous frame (prevents queue buildup)
+        if self.is_processing_frame:
+            return
+
+        self.is_processing_frame = True
+
+        try:
+            if q_image is not None:
+                # Scale image to fit display while maintaining aspect ratio
+                pixmap = QPixmap.fromImage(q_image)
+                scaled_pixmap = pixmap.scaled(
+                    self.video_label.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.FastTransformation
+                )
+                self.video_label.setPixmap(scaled_pixmap)
+        finally:
+            self.is_processing_frame = False
 
     @Slot(str)
     def update_recognition_results(self, result_text):
@@ -417,6 +451,16 @@ class CameraControlApp(QMainWindow):
         if result_text:
             self.results_text.append(f"[DETECTED] {result_text}")
             self.statusBar().showMessage(f"Code detected: {result_text[:50]}...")
+
+    @Slot(float)
+    def update_fps_display(self, fps):
+        """
+        Update the FPS display label.
+
+        Args:
+            fps: Frames per second value
+        """
+        self.fps_label.setText(f"FPS: {fps:.1f}")
 
     @Slot(str)
     def handle_worker_error(self, error_message):
