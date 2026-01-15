@@ -28,6 +28,7 @@ from PySide6.QtGui import QImage
 import logging
 
 from code_recognition import CodeRecognizer
+from code_storage import CodeStorage
 from ctypes import *
 
 sys.path.append("C:/Program Files/HuarayTech/MV Viewer/Development/Samples/Python/IMV/MVSDK")
@@ -77,6 +78,7 @@ class CameraWorker(QThread):
         self.camera = camera
         self.running = False
         self.recognizer = CodeRecognizer()
+        self.storage = CodeStorage()
 
         # Async recognition queue and thread
         self.recognition_queue = queue.Queue(maxsize=2)  # Limit queue size to avoid memory buildup
@@ -95,9 +97,6 @@ class CameraWorker(QThread):
         self.fps_frame_count = 0
         self.fps_start_time = time.time()
         self.fps_update_interval = 30  # Update FPS every 30 frames
-
-        # Performance monitoring
-        self.perf_monitoring = False  # Disable by default, enable for debugging
 
         # Callback function reference
         self.callback_func = None
@@ -236,11 +235,21 @@ class CameraWorker(QThread):
                 # Detect codes with positions
                 decoded_text, detections = self.recognizer.detect_codes_with_positions(bgr_image)
 
-                # Emit results
+                # Emit results and Store
                 if decoded_text:
-                    self.result_signal.emit(decoded_text)
+                    code_type = 'Unknown'
+                    if detections:
+                        code_type = detections[0]['type']
 
-                self.detection_signal.emit(detections)
+                    is_new = self.storage.add_code(decoded_text, code_type=code_type)
+
+                    if is_new: # Only emit new codes
+                        self.result_signal.emit(decoded_text)
+                        self.logger.info(f"New code recognized and stored: {decoded_text}")
+                    else:
+                        self.logger.debug(f"Duplicate code recognized: {decoded_text}")
+
+                self.detection_signal.emit(detections) # Emit detections for display
 
             except queue.Empty:
                 continue

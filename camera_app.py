@@ -93,8 +93,8 @@ class CameraControlApp(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
-        # ===== Device Selection Group =====
-        device_group = QGroupBox("Device Selection")
+        # ===== Device Selection and Configuration Group =====
+        device_group = QGroupBox("Device Selection and Configuration")
         device_layout = QHBoxLayout()
 
         # Device dropdown
@@ -117,6 +117,12 @@ class CameraControlApp(QMainWindow):
         device_layout.addStretch()
         device_group.setLayout(device_layout)
         main_layout.addWidget(device_group)
+
+        # Parameter configuration button
+        self.param_btn = QPushButton("Camera Parameters")
+        self.param_btn.clicked.connect(self.open_camera_parameter_window)
+        self.param_btn.setEnabled(False)
+        device_layout.addWidget(self.param_btn)
 
         # ===== Video Display Group =====
         video_group = QGroupBox("Camera Preview")
@@ -240,8 +246,10 @@ class CameraControlApp(QMainWindow):
         """
         if self.worker is None:
             self.connect_camera()
+            self.param_btn.setEnabled(True)
         else:
             self.disconnect_camera()
+            self.param_btn.setEnabled(False)
 
     def connect_camera(self):
         """
@@ -571,6 +579,28 @@ class CameraControlApp(QMainWindow):
                 event.ignore()
         else:
             event.accept()
+
+    def open_camera_parameter_window(self):
+        """
+        Open the camera parameter configuration window.
+        """
+        self.param_window = CameraParameterWindow(self.camera)
+        self.param_window.show()
+
+# SubWindow to configure camera parameters
+class CameraParameterWindow(QWidget):
+    """
+    Sub-window for configuring camera parameters.
+
+    This window allows users to adjust settings such as exposure,
+    gain, white balance, and other camera-specific parameters.
+    """
+
+    def __init__(self, camera):
+        super().__init__()
+        self.camera = camera
+        self.setWindowTitle("Camera Parameter Configuration")
+        self.setGeometry(150, 150, 400, 300)
 
 
 def main():
