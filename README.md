@@ -57,9 +57,5 @@ python camera_app.py
 - [ ] Add zoom and pan controls for video
 
 ### Low Priority
-- [ ] Add result export functionality
+- [x] Add result export functionality
 - [ ] Create installer package
-
-## License
-
-Intership use - Intern Project

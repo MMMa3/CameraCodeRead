@@ -2,6 +2,8 @@
 *.log
 # 缓存文件
 __pycache__/
+# 数据文件
+*.json
 # 无用文件夹
 MVSDK/
 demo/
