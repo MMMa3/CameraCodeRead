@@ -237,11 +237,12 @@ class CameraWorker(QThread):
 
                 # Emit results and Store
                 if decoded_text:
-                    code_type = 'Unknown'
-                    if detections:
-                        code_type = detections[0]['type']
+                    codes = decoded_text.split(',')
+                    for code in codes:
+                        code_type = code.split(':', 1)[0] if ":" in code else "Unknown"
+                        text = code.split(':', 1)[1] if ":" in code else code
 
-                    is_new = self.storage.add_code(decoded_text, code_type=code_type)
+                    is_new = self.storage.add_code(text, code_type=code_type)
 
                     if is_new: # Only emit new codes
                         self.result_signal.emit(decoded_text)

@@ -194,7 +194,6 @@ class CodeRecognizer:
                 if text and i < len(points):
                     detections.append({
                         'type': 'QR',
-                        'text': text,
                         'points': points[i].astype(np.int32)
                     })
                     text_results.append(f"QR:{text}")
@@ -263,7 +262,6 @@ class CodeRecognizer:
 
                     detections.append({
                         'type': barcode_type,
-                        'text': barcode_data,
                         'points': points
                     })
                     text_results.append(f"{barcode_type}:{barcode_data}")
