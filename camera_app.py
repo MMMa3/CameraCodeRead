@@ -633,6 +633,9 @@ class CameraParameterWindow(QWidget):
         # Load current parameters from camera
         self.load_parameters()
 
+        # Update parameter editability based on current camera state
+        self.update_parameter_editability()
+
     def init_ui(self):
         """Initialize the user interface with all parameter controls."""
         main_layout = QVBoxLayout()
@@ -693,9 +696,6 @@ class CameraParameterWindow(QWidget):
         exposure_group.setLayout(exposure_layout)
         layout.addWidget(exposure_group)
 
-        if self.config.get_editability(self.camera, "ExposureTime") == False:
-            self.exposure_spinbox.setEnabled(False)
-            
         # --- Exposure Mode ---
         exposure_mode_group = QGroupBox("Auto Exposure Mode")
         exposure_mode_layout = QHBoxLayout()
@@ -717,9 +717,6 @@ class CameraParameterWindow(QWidget):
         exposure_mode_layout.addWidget(self.exposure_mode_combo)
         exposure_mode_group.setLayout(exposure_mode_layout)
         layout.addWidget(exposure_mode_group)
-
-        if self.config.get_editability(self.camera, "ExposureAuto") == False:
-            self.exposure_mode_combo.setEnabled(False)
 
         # --- Raw Gain ---
         gain_group = QGroupBox("Raw Gain (dB)")
@@ -749,9 +746,6 @@ class CameraParameterWindow(QWidget):
         gain_group.setLayout(gain_layout)
         layout.addWidget(gain_group)
 
-        if self.config.get_editability(self.camera, "GainRaw") == False:
-            self.gain_spinbox.setEnabled(False)
-
         # --- Gamma ---
         gamma_group = QGroupBox("Gamma")
         gamma_layout = QVBoxLayout()
@@ -778,9 +772,6 @@ class CameraParameterWindow(QWidget):
         gamma_layout.addWidget(self.gamma_spinbox)
         gamma_group.setLayout(gamma_layout)
         layout.addWidget(gamma_group)
-
-        if self.config.get_editability(self.camera, "Gamma") == False:
-            self.gamma_spinbox.setEnabled(False)
 
         # --- Frame Rate ---
         framerate_group = QGroupBox("Frame Rate (fps)")
@@ -809,9 +800,6 @@ class CameraParameterWindow(QWidget):
         framerate_group.setLayout(framerate_layout)
         layout.addWidget(framerate_group)
 
-        if self.config.get_editability(self.camera, "AcquisitionFrameRate") == False:
-            self.framerate_spinbox.setEnabled(False)
-
         # --- IP Address ---
         ip_group = QGroupBox("IP Address")
         ip_layout = QHBoxLayout()
@@ -824,9 +812,6 @@ class CameraParameterWindow(QWidget):
         ip_group.setLayout(ip_layout)
         layout.addWidget(ip_group)
 
-        if self.config.get_editability(self.camera, "GevCurrentIPAddress") == False:
-            self.ip_input.setEnabled(False)
-
         # --- Pixel Format ---
         pixel_format_group = QGroupBox("Pixel Format")
         pixel_format_layout = QHBoxLayout()
@@ -838,9 +823,6 @@ class CameraParameterWindow(QWidget):
         pixel_format_layout.addWidget(self.pixel_format_combo)
         pixel_format_group.setLayout(pixel_format_layout)
         layout.addWidget(pixel_format_group)
-
-        if self.config.get_editability(self.camera, "PixelFormat") == False:
-            self.pixel_format_combo.setEnabled(False)
 
         # --- Balance White Auto ---
         balance_auto_group = QGroupBox("Balance White Auto")
@@ -864,9 +846,6 @@ class CameraParameterWindow(QWidget):
         balance_auto_group.setLayout(balance_auto_layout)
         layout.addWidget(balance_auto_group)
 
-        if self.config.get_editability(self.camera, "BalanceWhiteAuto") == False:
-            self.balance_auto_combo.setEnabled(False)
-
         # --- Balance Ratio Selector ---
         balance_selector_group = QGroupBox("Balance Ratio Selector")
         balance_selector_layout = QHBoxLayout()
@@ -888,9 +867,6 @@ class CameraParameterWindow(QWidget):
         balance_selector_layout.addWidget(self.balance_selector_combo)
         balance_selector_group.setLayout(balance_selector_layout)
         layout.addWidget(balance_selector_group)
-
-        if self.config.get_editability(self.camera, "BalanceRatioSelector") == False:
-            self.balance_selector_combo.setEnabled(False)
 
         # --- Balance Ratio ---
         balance_ratio_group = QGroupBox("Balance Ratio")
@@ -918,9 +894,6 @@ class CameraParameterWindow(QWidget):
         balance_ratio_layout.addWidget(self.balance_ratio_spinbox)
         balance_ratio_group.setLayout(balance_ratio_layout)
         layout.addWidget(balance_ratio_group)
-
-        if self.config.get_editability(self.camera, "BalanceRatio") == False:
-            self.balance_ratio_spinbox.setEnabled(False)
 
         # --- Buttons ---
         button_layout = QHBoxLayout()
