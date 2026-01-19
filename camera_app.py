@@ -1184,17 +1184,35 @@ class CameraParameterWindow(QWidget):
                     if index >= 0:
                         self.balance_auto_combo.setCurrentIndex(index)
 
-                # Apply balance ratio selector
+                # Apply balance ratios for all three channels
+                # Save current selector to restore later
+                current_selector = default_params.get('balance_ratio_selector', 'Red')
+
+                # Apply balance ratio for each channel
+                for channel, param_key in [('Red', 'balance_ratio_red'),
+                                           ('Green', 'balance_ratio_green'),
+                                           ('Blue', 'balance_ratio_blue')]:
+                    if param_key in default_params:
+                        # Set selector to the channel
+                        ret = self.camera.IMV_SetEnumFeatureSymbol("BalanceRatioSelector", channel)
+                        if ret == IMV_OK:
+                            # Apply the balance ratio for this channel
+                            ret = self.camera.IMV_SetDoubleFeatureValue("BalanceRatio", default_params[param_key])
+                            if ret == IMV_OK:
+                                self.logger.info(f"Applied BalanceRatio for {channel}: {default_params[param_key]}")
+                            else:
+                                self.logger.error(f"Failed to set BalanceRatio for {channel}. Error code: {ret}")
+                        else:
+                            self.logger.error(f"Failed to set BalanceRatioSelector to {channel}. Error code: {ret}")
+
+                # Restore the balance ratio selector to the saved value
                 if 'balance_ratio_selector' in default_params:
-                    self.on_balance_selector_changed(default_params['balance_ratio_selector'])
+                    self.camera.IMV_SetEnumFeatureSymbol("BalanceRatioSelector", default_params['balance_ratio_selector'])
                     index = self.balance_selector_combo.findText(default_params['balance_ratio_selector'])
                     if index >= 0:
                         self.balance_selector_combo.setCurrentIndex(index)
-
-                # Apply balance ratio
-                if 'balance_ratio' in default_params:
-                    self.on_balance_ratio_spinbox_changed(default_params['balance_ratio'])
-                    self.balance_ratio_spinbox.setValue(default_params['balance_ratio'])
+                    # Update the displayed balance ratio for the current selector
+                    self.load_balance_ratio()
 
                 self.logger.info("Successfully reset parameters to default values")
                 QMessageBox.information(self, "Success", "Parameters have been reset to default values!")
@@ -1222,6 +1240,37 @@ class CameraParameterWindow(QWidget):
 
             # Get all current parameters as a dictionary
             default_params = self.config.get_dict()
+
+            # Save current balance ratio selector to restore later
+            current_selector = self.balance_selector_combo.currentText()
+
+            # Read balance ratios for all three channels
+            balance_ratios = {}
+            for channel in ["Red", "Green", "Blue"]:
+                # Set the selector to the channel
+                ret = self.camera.IMV_SetEnumFeatureSymbol("BalanceRatioSelector", channel)
+                if ret == IMV_OK:
+                    # Read the balance ratio for this channel
+                    channel_ratio = c_double(0)
+                    ret = self.camera.IMV_GetDoubleFeatureValue("BalanceRatio", channel_ratio)
+                    if ret == IMV_OK:
+                        balance_ratios[channel] = channel_ratio.value
+                        self.logger.info(f"Read BalanceRatio for {channel}: {channel_ratio.value}")
+                    else:
+                        self.logger.error(f"Failed to read BalanceRatio for {channel}. Error code: {ret}")
+                else:
+                    self.logger.error(f"Failed to set BalanceRatioSelector to {channel}. Error code: {ret}")
+
+            # Restore original selector
+            self.camera.IMV_SetEnumFeatureSymbol("BalanceRatioSelector", current_selector)
+
+            # Replace single balance_ratio with channel-specific ratios
+            if balance_ratios:
+                default_params['balance_ratio_red'] = balance_ratios.get('Red', 1.0)
+                default_params['balance_ratio_green'] = balance_ratios.get('Green', 1.0)
+                default_params['balance_ratio_blue'] = balance_ratios.get('Blue', 1.0)
+                # Remove the old single balance_ratio field
+                default_params.pop('balance_ratio', None)
 
             # Define default config file path
             config_file = "camera_default_config.json"

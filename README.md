@@ -15,6 +15,8 @@ A Python application for controlling industrial cameras with real-time QR code a
 camera_app.py          - Main UI application (PySide6)
 camera_worker.py       - Worker thread for camera operations
 code_recognition.py    - QR/Barcode detection engine
+camera_config.py       - Get Camera Configuration through SDK
+code_storage.py        - Store code get in a json file
 MVSDK/                 - Huaray camera SDK wrapper installed in default position
 ```
 
@@ -49,13 +51,13 @@ python camera_app.py
 - [x] Add support for more pixel formats (Bayer, YUV)
 - [x] High Delay and chopping animation
 - [x] Implement visual bounding boxes for detected codes
-- [ ] Add camera parameter controls (exposure, gain)
+- [x] Add camera parameter controls (exposure, gain)
 - [x] Implement frame rate display
 
 ### Medium Priority
-- [ ] Implement configuration file for settings
+- [x] Implement configuration file for settings
 - [ ] Add zoom and pan controls for video
 
 ### Low Priority
 - [x] Add result export functionality
-- [ ] Create installer package
+- [x] Create installer package
