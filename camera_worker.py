@@ -101,8 +101,6 @@ class CameraWorker(QThread):
         # Callback function reference
         self.callback_func = None
 
-        # TODO: Add configurable recognition interval
-
     def run(self):
         """
         Main worker thread loop using callback mode.
@@ -237,10 +235,10 @@ class CameraWorker(QThread):
 
                 # Emit results and Store
                 if decoded_text:
-                    codes = decoded_text.split(',')
+                    codes = decoded_text.split(", ")
                     for code in codes:
-                        code_type = code.split(':', 1)[0] if ":" in code else "Unknown"
-                        text = code.split(':', 1)[1] if ":" in code else code
+                        code_type = code.split(":", 1)[0] if ":" in code else "Unknown"
+                        text = code.split(":", 1)[1] if ":" in code else code
 
                     is_new = self.storage.add_code(text, code_type=code_type)
 

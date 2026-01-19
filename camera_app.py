@@ -21,17 +21,20 @@ Workflow:
 """
 
 import sys
-import numpy as np
+import json
+import os
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox, QMessageBox, QSizePolicy
+    QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox, QMessageBox, QSizePolicy,
+    QDoubleSpinBox, QLineEdit, QScrollArea
 )
-from PySide6.QtCore import Qt, Slot, QPoint
+from PySide6.QtCore import Qt, Slot, QPoint, QTimer
 from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 import logging
 
 # Import SDK and custom modules
 from camera_worker import CameraWorker
+from camera_config import CameraConfig
 from ctypes import *
 
 sys.path.append("C:/Program Files/HuarayTech/MV Viewer/Development/Samples/Python/IMV/MVSDK")
@@ -46,6 +49,8 @@ class CameraControlApp(QMainWindow):
     - Camera connection/disconnection
     - Video stream display
     - QR/Barcode recognition results display
+
+    TODO: Add camera temperature monitoring and alerts
     """
 
     def __init__(self):
@@ -55,7 +60,7 @@ class CameraControlApp(QMainWindow):
             filename='camera_app.log',
             filemode='w',
             format='%(asctime)s - %(levelname)s - %(message)s',
-            level=logging.INFO
+            level=logging.WARNING
         )
         self.logger = logging.getLogger(__name__)
         self.setWindowTitle("Industrial Camera Control - QR/Barcode Recognition")
@@ -348,7 +353,6 @@ class CameraControlApp(QMainWindow):
         2. Close camera (IMV_Close)
         3. Destroy device handle (IMV_DestroyHandle)
 
-        TODO: Add graceful shutdown timeout
         TODO: Implement force disconnect option
         """
         self.log_message("Disconnecting camera...")
@@ -408,6 +412,7 @@ class CameraControlApp(QMainWindow):
             self.video_label.clear()
             self.video_label.setText("No camera connected")
             self.fps_label.setText("FPS: --")
+            self.param_window = None  # Close parameter window if open
 
             self.log_message("Camera disconnected successfully")
             self.statusBar().showMessage("Disconnected - Ready to connect")
@@ -569,7 +574,7 @@ class CameraControlApp(QMainWindow):
                 self,
                 "Confirm Exit",
                 "Camera is still connected. Disconnect and exit?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No # Original parameter:QMessageBox.Yes | QMessageBox.No
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
 
             if reply == QMessageBox.StandardButton.Yes:
@@ -584,7 +589,7 @@ class CameraControlApp(QMainWindow):
         """
         Open the camera parameter configuration window.
         """
-        self.param_window = CameraParameterWindow(self.camera)
+        self.param_window = CameraParameterWindow(self.worker, self.camera, self.logger, self)
         self.param_window.show()
 
 # SubWindow to configure camera parameters
@@ -594,14 +599,800 @@ class CameraParameterWindow(QWidget):
 
     This window allows users to adjust settings such as exposure,
     gain, white balance, and other camera-specific parameters.
+    
+    Exposure Time: Float type
+    Exposure Mode: Enum type (Off, Once, Continuous)
+    Raw Gain: Float type
+    Gamma: Float type
+    Frame Rate: Float type
+    ipAddress: String type
+    Pixel Format: Enum type
+    Balance White Auto: Enum type (Off, Once, Continuous)
+    Balance Ratio Selector: Enum type (Red, Green, Blue)
+    Balance Ratio: Float type
     """
 
-    def __init__(self, camera):
+    def __init__(self, worker, camera, logger, parent_window=None):
         super().__init__()
         self.camera = camera
+        self.worker = worker
+        self.logger = logger
+        self.parent_window = parent_window  # Store parent window reference
+        self.is_grabbing = True  # Track grabbing state
         self.setWindowTitle("Camera Parameter Configuration")
-        self.setGeometry(150, 150, 400, 300)
+        self.setGeometry(150, 150, 700, 800)
 
+        # --- Use centralized configuration ---
+        self.config = CameraConfig()
+
+        # --- Load parameter values from camera ---
+        self.config.load_from_camera(self.camera)
+
+        # Initialize UI
+        self.init_ui()
+
+        # Load current parameters from camera (Deprecated Function)
+        # self.load_parameters()
+
+        # Update parameter editability based on current camera state
+        self.update_parameter_editability()
+
+        # --- Timer for continuous mode refresh ---
+        self.refresh_timer = QTimer()
+        self.refresh_timer.timeout.connect(self.fresh_if_continuous)
+        self.refresh_timer.start(10000)  # Refresh every 10 seconds
+
+    def init_ui(self):
+        """Initialize the user interface with all parameter controls."""
+        main_layout = QVBoxLayout()
+
+        # Create scroll area for parameters
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        layout = QVBoxLayout()
+
+        # --- Stop Grabbing for Configuration ---
+        stop_group = QGroupBox("Stream Control")
+        stop_layout = QVBoxLayout()
+
+        self.toggle_grab_btn = QPushButton("Pause Stream")
+        self.toggle_grab_btn.clicked.connect(self.toggle_grabbing)
+        self.toggle_grab_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f39c12;
+                color: white;
+                font-weight: bold;
+                padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #e67e22;
+            }
+        """)
+
+        stop_layout.addWidget(self.toggle_grab_btn)
+        stop_group.setLayout(stop_layout)
+        layout.addWidget(stop_group)
+
+        # --- Exposure Time ---
+        # Get exposure time, min, max from camera
+        exposure_group = QGroupBox("Exposure Time (μs)")
+        exposure_layout = QVBoxLayout()
+
+        max_exposure = c_double(0)
+        min_exposure = c_double(0)
+        ret = self.camera.IMV_GetDoubleFeatureMin("ExposureTime", min_exposure)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get ExposureTime min: {ret}")
+        ret = self.camera.IMV_GetDoubleFeatureMax("ExposureTime", max_exposure)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get ExposureTime max: {ret}")
+
+        self.exposure_spinbox = QDoubleSpinBox()
+        self.exposure_spinbox.setMinimum(min_exposure.value)
+        self.exposure_spinbox.setMaximum(max_exposure.value)
+        self.exposure_spinbox.setSuffix(" μs")
+        # Set value BEFORE connecting signal to avoid triggering during init
+        self.exposure_spinbox.blockSignals(True)
+        self.exposure_spinbox.setValue(self.config.exposure_time.value)
+        self.exposure_spinbox.blockSignals(False)
+        # Removed immediate application - will apply on "Apply All" button click
+
+        exposure_layout.addWidget(self.exposure_spinbox)
+        exposure_group.setLayout(exposure_layout)
+        layout.addWidget(exposure_group)
+
+        # --- Exposure Mode ---
+        exposure_mode_group = QGroupBox("Auto Exposure Mode")
+        exposure_mode_layout = QHBoxLayout()
+
+        self.exposure_mode_combo = QComboBox()
+        self.exposure_mode_combo.addItems(["Off", "Once", "Continuous"])
+
+        # Set initial value BEFORE connecting signal to avoid triggering during init
+        exposure_mode_str = self.config.exposure_mode.str.decode('utf-8') if self.config.exposure_mode.str else "Off"
+        if exposure_mode_str:
+            self.exposure_mode_combo.blockSignals(True)
+            index = self.exposure_mode_combo.findText(exposure_mode_str)
+            if index >= 0:
+                self.exposure_mode_combo.setCurrentIndex(index)
+            self.exposure_mode_combo.blockSignals(False)
+
+        self.exposure_mode_combo.currentTextChanged.connect(self.on_exposure_mode_changed)
+
+        exposure_mode_layout.addWidget(self.exposure_mode_combo)
+        exposure_mode_group.setLayout(exposure_mode_layout)
+        layout.addWidget(exposure_mode_group)
+
+        # --- Raw Gain ---
+        gain_group = QGroupBox("Raw Gain (dB)")
+        gain_layout = QVBoxLayout()
+
+        max_gain = c_double(0)
+        min_gain = c_double(0)
+        ret = self.camera.IMV_GetDoubleFeatureMin("GainRaw", min_gain)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get GainRaw min: {ret}")
+        ret = self.camera.IMV_GetDoubleFeatureMax("GainRaw", max_gain)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get GainRaw max: {ret}")
+
+        self.gain_spinbox = QDoubleSpinBox()
+        self.gain_spinbox.setMinimum(min_gain.value)
+        self.gain_spinbox.setMaximum(max_gain.value)
+        self.gain_spinbox.setSingleStep(0.1)
+        self.gain_spinbox.setSuffix(" dB")
+        # Set value BEFORE connecting signal
+        self.gain_spinbox.blockSignals(True)
+        self.gain_spinbox.setValue(self.config.raw_gain.value)
+        self.gain_spinbox.blockSignals(False)
+        # Removed immediate application - will apply on "Apply All" button click
+
+        gain_layout.addWidget(self.gain_spinbox)
+        gain_group.setLayout(gain_layout)
+        layout.addWidget(gain_group)
+
+        # --- Gamma ---
+        gamma_group = QGroupBox("Gamma")
+        gamma_layout = QVBoxLayout()
+
+        max_gamma = c_double(0)
+        min_gamma = c_double(0)
+        ret = self.camera.IMV_GetDoubleFeatureMin("Gamma", min_gamma)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get Gamma min: {ret}")
+        ret = self.camera.IMV_GetDoubleFeatureMax("Gamma", max_gamma)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get Gamma max: {ret}")
+
+        self.gamma_spinbox = QDoubleSpinBox()
+        self.gamma_spinbox.setMinimum(min_gamma.value)
+        self.gamma_spinbox.setMaximum(max_gamma.value)
+        self.gamma_spinbox.setSingleStep(0.1)
+        # Set value BEFORE connecting signal
+        self.gamma_spinbox.blockSignals(True)
+        self.gamma_spinbox.setValue(self.config.gamma.value)
+        self.gamma_spinbox.blockSignals(False)
+        # Removed immediate application - will apply on "Apply All" button click
+
+        gamma_layout.addWidget(self.gamma_spinbox)
+        gamma_group.setLayout(gamma_layout)
+        layout.addWidget(gamma_group)
+
+        # --- Frame Rate ---
+        framerate_group = QGroupBox("Frame Rate (fps)")
+        framerate_layout = QVBoxLayout()
+
+        min_framerate = c_double(0)
+        max_framerate = c_double(0)
+        ret = self.camera.IMV_GetDoubleFeatureMin("AcquisitionFrameRate", min_framerate)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get AcquisitionFrameRate min: {ret}")
+        ret = self.camera.IMV_GetDoubleFeatureMax("AcquisitionFrameRate", max_framerate)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get AcquisitionFrameRate max: {ret}")
+
+        self.framerate_spinbox = QDoubleSpinBox()
+        self.framerate_spinbox.setMinimum(min_framerate.value)
+        self.framerate_spinbox.setMaximum(max_framerate.value)
+        self.framerate_spinbox.setSuffix(" fps")
+        # Set value BEFORE connecting signal
+        self.framerate_spinbox.blockSignals(True)
+        self.framerate_spinbox.setValue(self.config.frame_rate.value)
+        self.framerate_spinbox.blockSignals(False)
+        # Removed immediate application - will apply on "Apply All" button click
+
+        framerate_layout.addWidget(self.framerate_spinbox)
+        framerate_group.setLayout(framerate_layout)
+        layout.addWidget(framerate_group)
+
+        # --- IP Address ---
+        ip_group = QGroupBox("IP Address")
+        ip_layout = QHBoxLayout()
+
+        self.ip_input = QLineEdit()
+        self.ip_input.setPlaceholderText(self.config.ip_address.str.decode('utf-8') if self.config.ip_address.str else "Enter IP Address")
+        # Removed immediate application - will apply on "Apply All" button click
+
+        ip_layout.addWidget(self.ip_input)
+        ip_group.setLayout(ip_layout)
+        layout.addWidget(ip_group)
+
+        # --- Pixel Format ---
+        pixel_format_group = QGroupBox("Pixel Format")
+        pixel_format_layout = QHBoxLayout()
+
+        self.pixel_format_combo = QComboBox()
+        self.pixel_format_combo.addItems(["BayerRG8", "BayerRG10", "BayerRG12", "BayerRG10Packed", "BayerRG12Packed", "YUV422Packed"])
+
+        # See initial value BEFORE connecting signal
+        pixel_format_string = self.config.pixel_format.str.decode("utf-8") if self.config.pixel_format.str else ""
+        if pixel_format_string:
+            self.pixel_format_combo.blockSignals(True)
+            index = self.pixel_format_combo.findText(pixel_format_string)
+            if index >= 0:
+                self.pixel_format_combo.setCurrentIndex(index)
+            self.pixel_format_combo.blockSignals(False)
+
+        self.pixel_format_combo.currentTextChanged.connect(self.on_pixel_format_changed)
+
+        pixel_format_layout.addWidget(self.pixel_format_combo)
+        pixel_format_group.setLayout(pixel_format_layout)
+        layout.addWidget(pixel_format_group)
+
+        # --- Balance White Auto ---
+        balance_auto_group = QGroupBox("Balance White Auto")
+        balance_auto_layout = QHBoxLayout()
+
+        self.balance_auto_combo = QComboBox()
+        self.balance_auto_combo.addItems(["Off", "Once", "Continuous"])
+
+        # Set initial value BEFORE connecting signal
+        balance_auto_string = self.config.balance_auto.str.decode('utf-8') if self.config.balance_auto.str else "Off"
+        if balance_auto_string:
+            self.balance_auto_combo.blockSignals(True)
+            index = self.balance_auto_combo.findText(balance_auto_string)
+            if index >= 0:
+                self.balance_auto_combo.setCurrentIndex(index)
+            self.balance_auto_combo.blockSignals(False)
+
+        self.balance_auto_combo.currentTextChanged.connect(self.on_balance_auto_changed)
+        
+        balance_auto_layout.addWidget(self.balance_auto_combo)
+        balance_auto_group.setLayout(balance_auto_layout)
+        layout.addWidget(balance_auto_group)
+
+        # --- Balance Ratio Selector ---
+        balance_selector_group = QGroupBox("Balance Ratio Selector")
+        balance_selector_layout = QHBoxLayout()
+
+        self.balance_selector_combo = QComboBox()
+        self.balance_selector_combo.addItems(["Red", "Green", "Blue"])
+
+        # Set initial value BEFORE connecting signal
+        balance_selector_string = self.config.balance_ratio_selector.str.decode('utf-8') if self.config.balance_ratio_selector.str else "Off"
+        if balance_selector_string:
+            self.balance_selector_combo.blockSignals(True)
+            index = self.balance_selector_combo.findText(balance_selector_string)
+            if index >= 0:
+                self.balance_selector_combo.setCurrentIndex(index)
+            self.balance_selector_combo.blockSignals(False)
+
+        self.balance_selector_combo.currentTextChanged.connect(self.on_balance_selector_changed)
+
+        balance_selector_layout.addWidget(self.balance_selector_combo)
+        balance_selector_group.setLayout(balance_selector_layout)
+        layout.addWidget(balance_selector_group)
+
+        # --- Balance Ratio ---
+        balance_ratio_group = QGroupBox("Balance Ratio")
+        balance_ratio_layout = QVBoxLayout()
+
+        balance_ratio_max = c_double(0)
+        balance_ratio_min = c_double(0)
+        ret = self.camera.IMV_GetDoubleFeatureMin("BalanceRatio", balance_ratio_min)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get BalanceRatio min: {ret}")
+        ret = self.camera.IMV_GetDoubleFeatureMax("BalanceRatio", balance_ratio_max)
+        if ret != IMV_OK:
+            self.logger.error(f"Failed to get BalanceRatio max: {ret}")
+
+        self.balance_ratio_spinbox = QDoubleSpinBox()
+        self.balance_ratio_spinbox.setMinimum(balance_ratio_min.value)
+        self.balance_ratio_spinbox.setMaximum(balance_ratio_max.value)
+        self.balance_ratio_spinbox.setSingleStep(0.1)
+        # Set value BEFORE connecting signal
+        self.balance_ratio_spinbox.blockSignals(True)
+        self.balance_ratio_spinbox.setValue(self.config.balance_ratio.value)
+        self.balance_ratio_spinbox.blockSignals(False)
+        # Removed immediate application - will apply on "Apply All" button click
+
+        balance_ratio_layout.addWidget(self.balance_ratio_spinbox)
+        balance_ratio_group.setLayout(balance_ratio_layout)
+        layout.addWidget(balance_ratio_group)
+
+        # --- Buttons ---
+        button_layout = QHBoxLayout()
+
+        self.apply_btn = QPushButton("Apply All")
+        self.apply_btn.clicked.connect(self.apply_all_parameters)
+
+        self.reset_btn = QPushButton("Reset to Default")
+        self.reset_btn.clicked.connect(self.reset_to_default)
+
+        self.close_btn = QPushButton("Set as Default")
+        self.close_btn.clicked.connect(self.set_as_default)
+
+        button_layout.addWidget(self.apply_btn)
+        button_layout.addWidget(self.reset_btn)
+        button_layout.addWidget(self.close_btn)
+
+        layout.addLayout(button_layout)
+
+        # Set scroll widget
+        scroll_widget.setLayout(layout)
+        scroll.setWidget(scroll_widget)
+
+        main_layout.addWidget(scroll)
+        self.setLayout(main_layout)
+
+    # --- Event Handlers for Exposure Time ---
+    def on_exposure_spinbox_changed(self, value):
+        """Handle exposure spinbox change."""
+        if self.config.get_editability(self.camera, "ExposureTime"):
+            self.set_camera_parameter("ExposureTime", value)
+
+    # --- Event Handlers for Auto Exposure Mode ---
+    def on_exposure_mode_changed(self, text):
+        """Handle exposure mode change."""
+        if self.config.get_editability(self.camera, "ExposureAuto"):
+            self.set_camera_parameter("ExposureAuto", text)
+            self.update_parameter_editability()
+
+    # --- Event Handlers for Gain ---
+    def on_gain_spinbox_changed(self, value):
+        """Handle gain spinbox change."""
+        if self.config.get_editability(self.camera, "GainRaw"):
+            self.set_camera_parameter("GainRaw", value)
+
+    # --- Event Handlers for Gamma ---
+    def on_gamma_spinbox_changed(self, value):
+        """Handle gamma spinbox change."""
+        if self.config.get_editability(self.camera, "Gamma"):
+            self.set_camera_parameter("Gamma", value)
+
+    # --- Event Handlers for Frame Rate ---
+    def on_framerate_spinbox_changed(self, value):
+        """Handle frame rate spinbox change."""
+        if self.config.get_editability(self.camera, "AcquisitionFrameRate"):
+            self.set_camera_parameter("AcquisitionFrameRate", value)
+            self.set_camera_parameter("AcquisitionFrameRateEnable", True)
+
+    # --- Event Handlers for IP Address ---
+    def on_ip_changed(self):
+        """Handle IP address change."""
+        if self.config.get_editability(self.camera, "GevCurrentIPAddress"):
+            ip_address = self.ip_input.text()
+            self.set_camera_parameter("IPAddress", ip_address)
+
+    # --- Event Handlers for Pixel Format ---
+    def on_pixel_format_changed(self, text):
+        """Handle pixel format change."""
+        if self.config.get_editability(self.camera, "PixelFormat"):
+            self.set_camera_parameter("PixelFormat", text)
+
+    # --- Event Handlers for Balance White Auto ---
+    def on_balance_auto_changed(self, text):
+        """Handle balance white auto change."""
+        if self.config.get_editability(self.camera, "BalanceWhiteAuto"):
+            self.set_camera_parameter("BalanceWhiteAuto", text)
+            self.update_parameter_editability()
+
+    # --- Event Handlers for Balance Ratio Selector ---
+    def on_balance_selector_changed(self, text):
+        """Handle balance ratio selector change."""
+        if self.config.get_editability(self.camera, "BalanceRatioSelector"):
+            self.set_camera_parameter("BalanceRatioSelector", text)
+            # When selector changes, update the balance ratio display for that channel
+            self.update_parameter_editability()
+            self.load_balance_ratio()
+
+    # --- Event Handlers for Balance Ratio ---
+    def on_balance_ratio_spinbox_changed(self, value):
+        """Handle balance ratio spinbox change."""
+        if self.config.get_editability(self.camera, "BalanceRatio"):
+            self.set_camera_parameter("BalanceRatio", value)
+
+    # --- Camera Parameter Methods ---
+    def set_camera_parameter(self, param_name, value):
+        """Set a camera parameter."""
+        try:
+            if param_name in ["ExposureTime", "GainRaw", "Gamma", "AcquisitionFrameRate", "BalanceRatio"]:
+                ret = self.camera.IMV_SetDoubleFeatureValue(param_name, value)
+                if ret == IMV_OK:
+                    logging.info(f"Setting {param_name} to {value}")
+                else:
+                    raise Exception(f"Failed to set {param_name} to {value}. Error code: {ret}")
+            elif param_name in ["ExposureAuto", "BalanceWhiteAuto", "BalanceRatioSelector", "PixelFormat"]:
+                ret = self.camera.IMV_SetEnumFeatureSymbol(param_name, str(value))
+                if ret == IMV_OK:
+                    logging.info(f"Setting {param_name} to {value}")
+                else:
+                    raise Exception(f"Failed to set {param_name} to {value}. Error code: {ret}")
+            elif param_name == "AcquisitionFrameRateEnable":
+                ret = self.camera.IMV_SetBoolFeatureValue(param_name, value)
+                if ret == IMV_OK:
+                    logging.info(f"Setting {param_name} to {value}")
+                else:
+                    raise Exception(f"Failed to set {param_name} to {value}. Error code: {ret}")
+            else:  # String parameters
+                ret = self.camera.IMV_SetStringFeatureValue(param_name, value.encode('utf-8'))
+                if ret == IMV_OK:
+                    logging.info(f"Setting {param_name} to {value}")
+                else:
+                    raise Exception(f"Failed to set {param_name}. Error code: {ret}")
+
+        except Exception as e:
+            logging.error(f"Failed to set {param_name} to {value}: {e}")
+            QMessageBox.warning(self, "Parameter Error", f"Failed to set {param_name}: {str(e)}")
+
+# Deprecated Method:
+    # def load_parameters(self):
+    #     """Load current parameters from camera and populate UI controls."""
+    #     try:
+    #         # --- Load Exposure Time ---
+    #         self.exposure_spinbox.setValue(self.config.exposure_time.value)
+
+    #         # --- Load Exposure Mode (Enum) ---
+    #         exposure_mode_str = self.config.exposure_mode.str.decode('utf-8') if self.config.exposure_mode.str else ""
+    #         if exposure_mode_str:
+    #             index = self.exposure_mode_combo.findText(exposure_mode_str)
+    #             if index >= 0:
+    #                 self.exposure_mode_combo.setCurrentIndex(index)
+
+    #         # --- Load Raw Gain ---
+    #         self.gain_spinbox.setValue(self.config.raw_gain.value)
+
+    #         # --- Load Gamma ---
+    #         self.gamma_spinbox.setValue(self.config.gamma.value)
+
+    #         # --- Load Frame Rate ---
+    #         self.framerate_spinbox.setValue(self.config.frame_rate.value)
+
+    #         # --- Load IP Address ---
+    #         ip_str = self.config.ip_address.str.decode('utf-8') if self.config.ip_address.str else ""
+    #         self.ip_input.setText(ip_str)
+
+    #         # --- Load Pixel Format (Enum) ---
+    #         pixel_format_str = self.config.pixel_format.str.decode('utf-8') if self.config.pixel_format.str else ""
+    #         if pixel_format_str:
+    #             index = self.pixel_format_combo.findText(pixel_format_str)
+    #             if index >= 0:
+    #                 self.pixel_format_combo.setCurrentIndex(index)
+
+    #         # --- Load Balance White Auto (Enum) ---
+    #         balance_auto_str = self.config.balance_auto.str.decode('utf-8') if self.config.balance_auto.str else ""
+    #         if balance_auto_str:
+    #             index = self.balance_auto_combo.findText(balance_auto_str)
+    #             if index >= 0:
+    #                 self.balance_auto_combo.setCurrentIndex(index)
+
+    #         # --- Load Balance Ratio Selector (Enum) ---
+    #         selector_str = self.config.balance_ratio_selector.str.decode('utf-8') if self.config.balance_ratio_selector.str else ""
+    #         if selector_str:
+    #             index = self.balance_selector_combo.findText(selector_str)
+    #             if index >= 0:
+    #                 self.balance_selector_combo.setCurrentIndex(index)
+
+    #         # --- Load Balance Ratio ---
+    #         self.balance_ratio_spinbox.setValue(self.config.balance_ratio.value)
+
+    #         self.logger.info("Camera parameters loaded successfully")
+
+    #     except Exception as e:
+    #         self.logger.error(f"Failed to load parameters: {e}")
+
+    def load_balance_ratio(self):
+        """Load balance ratio for the currently selected channel."""
+        try:
+            self.config.load_from_camera(self.camera)
+            self.balance_ratio_spinbox.setValue(self.config.balance_ratio.value)
+        except Exception as e:
+            logging.error(f"Failed to load balance ratio: {e}")
+
+    def apply_all_parameters(self):
+        """Apply all text input parameters to camera. Dropdown menus are applied immediately."""
+        try:
+            # Apply text input parameters (SpinBox and LineEdit)
+            # Note: Dropdown menus (ComboBox) are already applied immediately on change
+            self.on_exposure_spinbox_changed(self.exposure_spinbox.value())
+            self.on_gain_spinbox_changed(self.gain_spinbox.value())
+            self.on_gamma_spinbox_changed(self.gamma_spinbox.value())
+            self.on_framerate_spinbox_changed(self.framerate_spinbox.value())
+            self.on_ip_changed()
+            self.on_balance_ratio_spinbox_changed(self.balance_ratio_spinbox.value())
+
+            QMessageBox.information(self, "Success", "All parameters applied successfully!")
+            self.update_parameter_editability()
+        except Exception as e:
+            logging.error(f"Failed to apply parameters: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to apply parameters: {str(e)}")
+
+    def reset_to_default(self):
+        """Reset all parameters to default values from saved configuration file."""
+        try:
+            # Define default config file path
+            config_file = "camera_default_config.json"
+
+            if not os.path.exists(config_file):
+                QMessageBox.warning(
+                    self,
+                    "No Default Configuration",
+                    "No default configuration file found. Please set default parameters first using 'Set as Default' button."
+                )
+                return
+
+            # Load default parameters from JSON file
+            with open(config_file, 'r') as f:
+                default_params = json.load(f)
+
+            # Stop grabbing before applying parameters
+            was_grabbing = self.is_grabbing
+            if was_grabbing:
+                self.pause_grabbing()
+
+            # Apply each parameter to camera
+            try:
+                # Apply exposure time
+                if 'exposure_time' in default_params:
+                    self.on_exposure_spinbox_changed(default_params['exposure_time'])
+                    self.exposure_spinbox.setValue(default_params['exposure_time'])
+
+                # Apply exposure mode
+                if 'exposure_mode' in default_params:
+                    self.on_exposure_mode_changed(default_params['exposure_mode'])
+                    index = self.exposure_mode_combo.findText(default_params['exposure_mode'])
+                    if index >= 0:
+                        self.exposure_mode_combo.setCurrentIndex(index)
+
+                # Apply gain
+                if 'raw_gain' in default_params:
+                    self.on_gain_spinbox_changed(default_params['raw_gain'])
+                    self.gain_spinbox.setValue(default_params['raw_gain'])
+
+                # Apply gamma
+                if 'gamma' in default_params:
+                    self.on_gamma_spinbox_changed(default_params['gamma'])
+                    self.gamma_spinbox.setValue(default_params['gamma'])
+
+                # Apply frame rate
+                if 'frame_rate' in default_params:
+                    self.on_framerate_spinbox_changed(default_params['frame_rate'])
+                    self.framerate_spinbox.setValue(default_params['frame_rate'])
+
+                # Apply pixel format
+                if 'pixel_format' in default_params:
+                    self.on_pixel_format_changed(default_params['pixel_format'])
+                    index = self.pixel_format_combo.findText(default_params['pixel_format'])
+                    if index >= 0:
+                        self.pixel_format_combo.setCurrentIndex(index)
+
+                # Apply balance white auto
+                if 'balance_auto' in default_params:
+                    self.on_balance_auto_changed(default_params['balance_auto'])
+                    index = self.balance_auto_combo.findText(default_params['balance_auto'])
+                    if index >= 0:
+                        self.balance_auto_combo.setCurrentIndex(index)
+
+                # Apply balance ratio selector
+                if 'balance_ratio_selector' in default_params:
+                    self.on_balance_selector_changed(default_params['balance_ratio_selector'])
+                    index = self.balance_selector_combo.findText(default_params['balance_ratio_selector'])
+                    if index >= 0:
+                        self.balance_selector_combo.setCurrentIndex(index)
+
+                # Apply balance ratio
+                if 'balance_ratio' in default_params:
+                    self.on_balance_ratio_spinbox_changed(default_params['balance_ratio'])
+                    self.balance_ratio_spinbox.setValue(default_params['balance_ratio'])
+
+                self.logger.info("Successfully reset parameters to default values")
+                QMessageBox.information(self, "Success", "Parameters have been reset to default values!")
+
+            finally:
+                # Resume grabbing if it was active before
+                if was_grabbing:
+                    self.resume_grabbing()
+
+                # Update parameter editability
+                self.update_parameter_editability()
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Failed to parse default configuration file: {e}")
+            QMessageBox.critical(self, "Error", f"Invalid configuration file format: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"Failed to reset to default: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to reset parameters: {str(e)}")
+
+    def set_as_default(self):
+        """Set current parameters to a configuration file as default."""
+        try:
+            # Reload current parameters from camera to ensure we have the latest values
+            self.config.load_from_camera(self.camera)
+
+            # Get all current parameters as a dictionary
+            default_params = self.config.get_dict()
+
+            # Define default config file path
+            config_file = "camera_default_config.json"
+
+            # Save parameters to JSON file
+            with open(config_file, 'w') as f:
+                json.dump(default_params, f, indent=4)
+
+            self.logger.info(f"Successfully saved default configuration to {config_file}")
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Current parameters have been saved as default configuration!\n\nFile: {config_file}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Failed to save default configuration: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save default configuration: {str(e)}")
+
+    def toggle_grabbing(self):
+        """Toggle between pausing and resuming stream grabbing."""
+        if self.worker is None:
+            QMessageBox.warning(self, "Warning", "No active worker thread!")
+            return
+
+        if self.is_grabbing:
+            # Currently grabbing, so pause it
+            self.pause_grabbing()
+            # After pausing, check parameter editability and update UI
+            self.update_parameter_editability()
+        else:
+            # Currently paused, so resume it
+            self.resume_grabbing()
+            # After resuming, check parameter editability and update UI
+            self.update_parameter_editability()
+
+    def update_parameter_editability(self):
+        """Check editability for each parameter and enable/disable controls accordingly."""
+        try:
+            # Map parameter names to their corresponding UI controls
+            param_control_map = {
+                "ExposureTime": self.exposure_spinbox,
+                "ExposureAuto": self.exposure_mode_combo,
+                "GainRaw": self.gain_spinbox,
+                "Gamma": self.gamma_spinbox,
+                "AcquisitionFrameRate": self.framerate_spinbox,
+                "GevCurrentIPAddress": self.ip_input,
+                "PixelFormat": self.pixel_format_combo,
+                "BalanceWhiteAuto": self.balance_auto_combo,
+                "BalanceRatioSelector": self.balance_selector_combo,
+                "BalanceRatio": self.balance_ratio_spinbox
+            }
+
+            # Check editability for each parameter and update controls
+            for param_name, control in param_control_map.items():
+                is_editable = self.config.get_editability(self.camera, param_name)
+                control.setEnabled(is_editable)
+
+                # Log the editability status
+                status = "editable" if is_editable else "not editable"
+                self.logger.info(f"Parameter '{param_name}' is {status}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to update parameter editability: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to check parameter editability: {str(e)}")
+
+
+    def pause_grabbing(self):
+        """Pause the stream grabbing."""
+        try:
+            if self.worker is not None:
+                # Temporarily disconnect signals to stop processing
+                self.worker.image_signal.disconnect()
+                self.worker.result_signal.disconnect()
+                self.worker.error_signal.disconnect()
+                self.worker.status_signal.disconnect()
+
+                # Stop the worker thread
+                self.worker.stop()
+                self.worker.wait(1000)
+
+                # Update state
+                self.is_grabbing = False
+                self.toggle_grab_btn.setText("Resume Stream")
+                self.toggle_grab_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #27ae60;
+                        color: white;
+                        font-weight: bold;
+                        padding: 8px;
+                    }
+                    QPushButton:hover {
+                        background-color: #229954;
+                    }
+                """)
+
+                logging.info("Stream grabbing paused")
+        except Exception as e:
+            logging.error(f"Failed to pause grabbing: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to pause stream: {str(e)}")
+
+    def resume_grabbing(self):
+        """Resume the stream grabbing."""
+        try:
+            if self.worker is not None and self.parent_window is not None:
+                # Reconnect signals to parent window slots
+                self.worker.image_signal.connect(self.parent_window.update_video_display)
+                self.worker.result_signal.connect(self.parent_window.update_recognition_results)
+                self.worker.error_signal.connect(self.parent_window.handle_worker_error)
+                self.worker.status_signal.connect(self.parent_window.log_message)
+
+                # Restart the worker thread
+                self.worker.start()
+
+                # Update state
+                self.is_grabbing = True
+                self.toggle_grab_btn.setText("Pause Stream")
+                self.toggle_grab_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #f39c12;
+                        color: white;
+                        font-weight: bold;
+                        padding: 8px;
+                    }
+                    QPushButton:hover {
+                        background-color: #e67e22;
+                    }
+                """)
+
+                logging.info("Stream grabbing resumed")
+            else:
+                QMessageBox.warning(self, "Error", "Parent window reference not found!")
+        except Exception as e:
+            logging.error(f"Failed to resume grabbing: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to resume stream: {str(e)}")
+
+    def fresh_if_continuous(self):
+        """
+        If ExposureAuto == Continuous, refresh exposure time every 10 seconds;
+        if BalanceWhiteAuto == Continuous, refresh balance ratio every 10 seconds
+        """
+        try:
+            # Check if ExposureAuto is in Continuous mode
+            if self.exposure_mode_combo.currentText() == "Continuous":
+                # Reload exposure time from camera
+                ret = self.camera.IMV_GetDoubleFeatureValue("ExposureTime", self.config.exposure_time)
+                if ret == IMV_OK:
+                    # Update UI with new value
+                    self.exposure_spinbox.blockSignals(True)
+                    self.exposure_spinbox.setValue(self.config.exposure_time.value)
+                    self.exposure_spinbox.blockSignals(False)
+                    self.logger.info(f"Refreshed ExposureTime: {self.config.exposure_time.value} μs")
+                else:
+                    self.logger.error(f"Failed to refresh ExposureTime. Error code: {ret}")
+
+            # Check if BalanceWhiteAuto is in Continuous mode
+            if self.balance_auto_combo.currentText() == "Continuous":
+                # Reload balance ratio from camera for currently selected channel
+                ret = self.camera.IMV_GetDoubleFeatureValue("BalanceRatio", self.config.balance_ratio)
+                if ret == IMV_OK:
+                    # Update UI with new value
+                    self.balance_ratio_spinbox.blockSignals(True)
+                    self.balance_ratio_spinbox.setValue(self.config.balance_ratio.value)
+                    self.balance_ratio_spinbox.blockSignals(False)
+                    current_channel = self.balance_selector_combo.currentText()
+                    self.logger.info(f"Refreshed BalanceRatio for {current_channel}: {self.config.balance_ratio.value}")
+                else:
+                    self.logger.error(f"Failed to refresh BalanceRatio. Error code: {ret}")
+
+        except Exception as e:
+            self.logger.error(f"Error in fresh_if_continuous: {e}")
 
 def main():
     """
