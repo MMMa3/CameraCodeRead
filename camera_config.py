@@ -29,15 +29,17 @@ from IMVApi import *
 
 # Configure module logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)  # Changed to DEBUG to capture debug messages
 
 # Create file handler if not already exists
 if not logger.handlers:
-    file_handler = logging.FileHandler('camera_config.log', mode='w')
-    file_handler.setLevel(logging.INFO)
+    file_handler = logging.FileHandler('camera_config.log', mode='a')  # Changed to 'a' (append) mode
+    file_handler.setLevel(logging.DEBUG)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+logger.info(f"Camera config module loaded at {__name__}")
 
 
 class CameraConfig:
@@ -89,88 +91,130 @@ class CameraConfig:
         Returns:
             bool: True if all parameters loaded successfully, False otherwise
         """
+        logger.info("Starting to load parameters from camera...")
         success = True
 
         # Load exposure time
-        ret = camera.IMV_FeatureIsReadable("ExposureTime")
-        if ret == IMV_OK:
+        logger.debug("Checking ExposureTime readability...")
+        rel = camera.IMV_FeatureIsReadable("ExposureTime")
+        if rel == True:
             ret = camera.IMV_GetDoubleFeatureValue("ExposureTime", self.exposure_time)
+            logger.debug(f"Exposure time: {self.exposure_time.value}")
             if ret != IMV_OK:
                 logger.error(f"Get ExposureTime failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"ExposureTime is not readable.ErrorCode: {rel}")
 
         # Load exposure mode
-        ret = camera.IMV_FeatureIsReadable("ExposureAuto")
-        if ret == IMV_OK:
-            ret = camera.IMV_GetEnumFeatureValue("ExposureAuto", self.exposure_mode)
+        logger.debug("Checking ExposureAuto readability...")
+        rel = camera.IMV_FeatureIsReadable("ExposureAuto")
+        if rel == True:
+            ret = camera.IMV_GetEnumFeatureSymbol("ExposureAuto", self.exposure_mode)
+            logger.debug(f"Exposure mode: {self.exposure_mode.str.decode('utf-8') if self.exposure_mode.str else 'None'}")
             if ret != IMV_OK:
                 logger.error(f"Get ExposureAuto failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"ExposureAuto is not readable. ErrorCode: {rel}")
 
         # Load gain
-        ret = camera.IMV_FeatureIsReadable("GainRaw")
-        if ret == IMV_OK:
+        logger.debug("Checking GainRaw readability...")
+        rel = camera.IMV_FeatureIsReadable("GainRaw")
+        if rel == True:
             ret = camera.IMV_GetDoubleFeatureValue("GainRaw", self.raw_gain)
+            logger.debug(f"Raw Gain: {self.raw_gain.value}")
             if ret != IMV_OK:
                 logger.error(f"Get GainRaw failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"GainRaw is not readable. ErrorCode: {rel}")
 
         # Load gamma
-        ret = camera.IMV_FeatureIsReadable("Gamma")
-        if ret == IMV_OK:
+        logger.debug("Checking Gamma readability...")
+        rel = camera.IMV_FeatureIsReadable("Gamma")
+        if rel == True:
             ret = camera.IMV_GetDoubleFeatureValue("Gamma", self.gamma)
+            logger.debug(f"Gamma: {self.gamma.value}")
             if ret != IMV_OK:
                 logger.error(f"Get Gamma failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"Gamma is not readable. ErrorCode: {rel}")
 
         # Load frame rate
-        ret = camera.IMV_FeatureIsReadable("AcquisitionFrameRate")
-        if ret == IMV_OK:
+        logger.debug("Checking AcquisitionFrameRate readability...")
+        rel = camera.IMV_FeatureIsReadable("AcquisitionFrameRate")
+        if rel == True:
             ret = camera.IMV_GetDoubleFeatureValue("AcquisitionFrameRate", self.frame_rate)
+            logger.debug(f"Acquisition Frame Rate: {self.frame_rate.value}")
             if ret != IMV_OK:
                 logger.error(f"Get AcquisitionFrameRate failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"AcquisitionFrameRate is not readable. ErrorCode: {rel}")
 
         # Load IP address
-        ret = camera.IMV_FeatureIsReadable("GevCurrentIPAddress")
-        if ret == IMV_OK:
+        logger.debug("Checking GevCurrentIPAddress readability...")
+        rel = camera.IMV_FeatureIsReadable("GevCurrentIPAddress")
+        if rel == True:
             ret = camera.IMV_GetStringFeatureValue("GevCurrentIPAddress", self.ip_address)
+            logger.debug(f"Gev Current IP Address: {self.ip_address.str.decode('utf-8') if self.ip_address.str else 'None'}")
             if ret != IMV_OK:
                 logger.error(f"Get GevCurrentIPAddress failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"GevCurrentIPAddress is not readable. ErrorCode: {rel}")
 
         # Load pixel format
-        ret = camera.IMV_FeatureIsReadable("PixelFormat")
-        if ret == IMV_OK:
-            ret = camera.IMV_GetEnumFeatureValue("PixelFormat", self.pixel_format)
+        logger.debug("Checking PixelFormat readability...")
+        rel = camera.IMV_FeatureIsReadable("PixelFormat")
+        if rel == True:
+            ret = camera.IMV_GetEnumFeatureSymbol("PixelFormat", self.pixel_format)
+            logger.debug(f"Pixel format: {self.pixel_format.str.decode('utf-8') if self.pixel_format.str else 'None'}")
             if ret != IMV_OK:
                 logger.error(f"Get PixelFormat failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"PixelFormat is not readable. ErrorCode: {rel}")
 
         # Load white balance auto
-        ret = camera.IMV_FeatureIsReadable("BalanceWhiteAuto")
-        if ret == IMV_OK:
-            ret = camera.IMV_GetEnumFeatureValue("BalanceWhiteAuto", self.balance_auto)
+        logger.debug("Checking BalanceWhiteAuto readability...")
+        rel = camera.IMV_FeatureIsReadable("BalanceWhiteAuto")
+        if rel == True:
+            ret = camera.IMV_GetEnumFeatureSymbol("BalanceWhiteAuto", self.balance_auto)
+            logger.debug(f"Balance White Auto: {self.balance_auto.str.decode('utf-8') if self.balance_auto.str else 'None'}")
             if ret != IMV_OK:
                 logger.error(f"Get BalanceWhiteAuto failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"BalanceWhiteAuto is not readable. ErrorCode: {rel}")
 
         # Load balance ratio selector
-        ret = camera.IMV_FeatureIsReadable("BalanceRatioSelector")
-        if ret == IMV_OK:
-            ret = camera.IMV_GetEnumFeatureValue("BalanceRatioSelector", self.balance_ratio_selector)
+        logger.debug("Checking BalanceRatioSelector readability...")
+        rel = camera.IMV_FeatureIsReadable("BalanceRatioSelector")
+        if rel == True:
+            ret = camera.IMV_GetEnumFeatureSymbol("BalanceRatioSelector", self.balance_ratio_selector)
+            logger.debug(f"Balance Ratio Selector: {self.balance_ratio_selector.str.decode('utf-8') if self.balance_ratio_selector.str else 'None'}")
             if ret != IMV_OK:
                 logger.error(f"Get BalanceRatioSelector failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"BalanceRatioSelector is not readable. ErrorCode: {rel}")
 
         # Load balance ratio
-        ret = camera.IMV_FeatureIsReadable("BalanceRatio")
-        if ret == IMV_OK:
+        logger.debug("Checking BalanceRatio readability...")
+        rel = camera.IMV_FeatureIsReadable("BalanceRatio")
+        if rel == True:
             ret = camera.IMV_GetDoubleFeatureValue("BalanceRatio", self.balance_ratio)
+            logger.debug(f"Balance Ratio: {self.balance_ratio.value}")
             if ret != IMV_OK:
                 logger.error(f"Get BalanceRatio failed! ErrorCode: {ret}")
                 success = False
+        else:
+            logger.warning(f"BalanceRatio is not readable. ErrorCode: {rel}")
 
+        logger.info(f"Finished loading parameters. Success: {success}")
         return success
 
     def get_dict(self):
@@ -200,11 +244,15 @@ class CameraConfig:
         Args:
             camera: MvCamera instance (already opened and connected)
             param_name: Optional parameter name to check editability for
+
+        Returns:
+            bool: True if parameter is writable, False otherwise
         """
         if param_name:
-            editability = camera.IMV_FeatureIsWriteable(param_name)
+            ret = camera.IMV_FeatureIsWriteable(param_name)
+            return ret
 
-            return editability
+        return False
 
     def __repr__(self):
         """String representation for debugging"""

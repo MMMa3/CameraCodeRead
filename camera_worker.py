@@ -101,8 +101,6 @@ class CameraWorker(QThread):
         # Callback function reference
         self.callback_func = None
 
-        # TODO: Add configurable recognition interval
-
     def run(self):
         """
         Main worker thread loop using callback mode.

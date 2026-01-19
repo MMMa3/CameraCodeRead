@@ -32,7 +32,7 @@ logger.setLevel(logging.INFO)
 
 # Create file handler if not already exists
 if not logger.handlers:
-    file_handler = logging.FileHandler('code_recognition.log', mode='w')
+    file_handler = logging.FileHandler('code_recognition.log', mode='a')
     file_handler.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
@@ -54,8 +54,6 @@ class CodeRecognizer:
     def __init__(self):
         """
         Initialize recognition engines.
-
-        TODO: Add barcode type filtering options
         """
         # Initialize QR code detector
         try:
