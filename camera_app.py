@@ -625,7 +625,7 @@ class CameraParameterWindow(QWidget):
         self.config = CameraConfig()
 
         # --- Load parameter values from camera ---
-        self.config.load_from_camera(self.camera, self.logger)
+        self.config.load_from_camera(self.camera)
 
         # Initialize UI
         self.init_ui()
@@ -990,7 +990,7 @@ class CameraParameterWindow(QWidget):
                 if ret == IMV_OK:
                     logging.info(f"Setting {param_name} to {value}")
                 else:
-                    raise Exception(f"Failed to set {param_name}. Error code: {ret}")
+                    raise Exception(f"Failed to set {param_name} to {value.encode('utf-8')}. Error code: {ret}")
             elif param_name == "AcquisitionFrameRateEnable":
                 ret = self.camera.IMV_SetBoolFeatureValue(param_name, value)
                 if ret == IMV_OK:
@@ -1063,7 +1063,7 @@ class CameraParameterWindow(QWidget):
     def load_balance_ratio(self):
         """Load balance ratio for the currently selected channel."""
         try:
-            self.config.load_from_camera(self.camera, self.logger)
+            self.config.load_from_camera(self.camera)
             self.balance_ratio_spinbox.setValue(self.config.balance_ratio.value)
         except Exception as e:
             logging.error(f"Failed to load balance ratio: {e}")

@@ -22,9 +22,22 @@ Usage:
 
 from ctypes import *
 import sys
+import logging
 
 sys.path.append("C:/Program Files/HuarayTech/MV Viewer/Development/Samples/Python/IMV/MVSDK")
 from IMVApi import *
+
+# Configure module logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create file handler if not already exists
+if not logger.handlers:
+    file_handler = logging.FileHandler('camera_config.log', mode='w')
+    file_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
 
 
 class CameraConfig:
@@ -66,13 +79,12 @@ class CameraConfig:
 
         self._initialized = True
 
-    def load_from_camera(self, camera, logger=None):
+    def load_from_camera(self, camera):
         """
         Load parameter values from a connected camera.
 
         Args:
             camera: MvCamera instance (already opened and connected)
-            logger: Optional logger instance for error reporting
 
         Returns:
             bool: True if all parameters loaded successfully, False otherwise
@@ -84,17 +96,15 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetDoubleFeatureValue("ExposureTime", self.exposure_time)
             if ret != IMV_OK:
-              if logger:
-                  logger.error(f"Get ExposureTime failed! ErrorCode: {ret}")
-              success = False
+                logger.error(f"Get ExposureTime failed! ErrorCode: {ret}")
+                success = False
 
         # Load exposure mode
         ret = camera.IMV_FeatureIsReadable("ExposureAuto")
         if ret == IMV_OK:
             ret = camera.IMV_GetEnumFeatureValue("ExposureAuto", self.exposure_mode)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get ExposureAuto failed! ErrorCode: {ret}")
+                logger.error(f"Get ExposureAuto failed! ErrorCode: {ret}")
                 success = False
 
         # Load gain
@@ -102,8 +112,7 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetDoubleFeatureValue("GainRaw", self.raw_gain)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get GainRaw failed! ErrorCode: {ret}")
+                logger.error(f"Get GainRaw failed! ErrorCode: {ret}")
                 success = False
 
         # Load gamma
@@ -111,8 +120,7 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetDoubleFeatureValue("Gamma", self.gamma)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get Gamma failed! ErrorCode: {ret}")
+                logger.error(f"Get Gamma failed! ErrorCode: {ret}")
                 success = False
 
         # Load frame rate
@@ -120,8 +128,7 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetDoubleFeatureValue("AcquisitionFrameRate", self.frame_rate)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get AcquisitionFrameRate failed! ErrorCode: {ret}")
+                logger.error(f"Get AcquisitionFrameRate failed! ErrorCode: {ret}")
                 success = False
 
         # Load IP address
@@ -129,17 +136,15 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetStringFeatureValue("GevCurrentIPAddress", self.ip_address)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get GevCurrentIPAddress failed! ErrorCode: {ret}")
+                logger.error(f"Get GevCurrentIPAddress failed! ErrorCode: {ret}")
                 success = False
-        
+
         # Load pixel format
         ret = camera.IMV_FeatureIsReadable("PixelFormat")
         if ret == IMV_OK:
             ret = camera.IMV_GetEnumFeatureValue("PixelFormat", self.pixel_format)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get PixelFormat failed! ErrorCode: {ret}")
+                logger.error(f"Get PixelFormat failed! ErrorCode: {ret}")
                 success = False
 
         # Load white balance auto
@@ -147,8 +152,7 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetEnumFeatureValue("BalanceWhiteAuto", self.balance_auto)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get BalanceWhiteAuto failed! ErrorCode: {ret}")
+                logger.error(f"Get BalanceWhiteAuto failed! ErrorCode: {ret}")
                 success = False
 
         # Load balance ratio selector
@@ -156,8 +160,7 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetEnumFeatureValue("BalanceRatioSelector", self.balance_ratio_selector)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get BalanceRatioSelector failed! ErrorCode: {ret}")
+                logger.error(f"Get BalanceRatioSelector failed! ErrorCode: {ret}")
                 success = False
 
         # Load balance ratio
@@ -165,8 +168,7 @@ class CameraConfig:
         if ret == IMV_OK:
             ret = camera.IMV_GetDoubleFeatureValue("BalanceRatio", self.balance_ratio)
             if ret != IMV_OK:
-                if logger:
-                    logger.error(f"Get BalanceRatio failed! ErrorCode: {ret}")
+                logger.error(f"Get BalanceRatio failed! ErrorCode: {ret}")
                 success = False
 
         return success
