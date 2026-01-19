@@ -8,6 +8,8 @@ A Python application for controlling industrial cameras with real-time QR code a
 - **Live Preview**: Real-time video stream display
 - **Code Recognition**: Detect QR codes and barcodes in real-time
 - **Thread-Safe Architecture**: UI thread + Worker thread for responsive interface
+- **Save Recognition Result**: Code recognition result would be saved to .json file
+- **Camera Parameter Configure**: Some Camera Configuration parameters can be edited
 
 ## Architecture
 
@@ -27,7 +29,7 @@ MVSDK/                 - Huaray camera SDK wrapper installed in default position
 pip install -r requirements.txt
 ```
 
-2. Ensure Huaray MVSDK is installed (from manufacturer) in **default** position
+2. Ensure Huaray MVSDK is installed (from manufacturer) in **default** position $\star$
 
 3. Make Sure installed opencv-contrib-python >= 4.5.0 and wechat QR CNN Model in local project
 
@@ -37,6 +39,20 @@ Run the application:
 ```bash
 python camera_app.py
 ```
+
+## Pack with PyInstaller
+
+Install PyInstaller to environment first
+```bash
+pip install pyinstaller
+```
+
+Run:
+```bash
+pyinstaller pyinstaller.spec
+```
+
+build/ and dist/ directions will be made and the application is in dist/CameraCodeRead.exe, double click to run it
 
 **Workflow:**
 1. Click "Refresh Devices" to discover cameras

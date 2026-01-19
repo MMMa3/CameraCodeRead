@@ -7,3 +7,5 @@ __pycache__/
 # 无用文件夹
 MVSDK/
 demo/
+build/
+dist/
