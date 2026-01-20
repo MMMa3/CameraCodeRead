@@ -12,8 +12,6 @@ added_files = [
     ('detect.prototxt', '.'),
     ('sr.caffemodel', '.'),
     ('sr.prototxt', '.'),
-    # 如果你有默认配置文件也可以加入
-    # ('camera_default_config.json', '.'),
 ]
 
 # 自动收集一些库的必要数据文件

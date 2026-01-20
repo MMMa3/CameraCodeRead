@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QLineEdit, QScrollArea
 )
 from PySide6.QtCore import Qt, Slot, QPoint, QTimer
-from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
+from PySide6.QtGui import QCloseEvent, QImage, QPixmap, QPainter, QPen, QColor, QIcon
 import logging
 
 # Import SDK and custom modules
@@ -39,6 +39,11 @@ from ctypes import *
 
 sys.path.append("C:/Program Files/HuarayTech/MV Viewer/Development/Samples/Python/IMV/MVSDK")
 from IMVApi import *
+
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class CameraControlApp(QMainWindow):
     """
@@ -64,7 +69,8 @@ class CameraControlApp(QMainWindow):
         )
         self.logger = logging.getLogger(__name__)
         self.setWindowTitle("Industrial Camera Control - QR/Barcode Recognition")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setWindowIcon(QIcon(resource_path("icon.ico")))
+        self.setGeometry(100, 100, 1100, 700)
 
         # Camera and worker thread references
         self.camera = MvCamera()
@@ -77,6 +83,14 @@ class CameraControlApp(QMainWindow):
 
         # Detection results for annotation overlay
         self.current_detections = []
+
+        # fps 
+        self.current_fps = 0.0
+
+        # Temperature monitoring
+        self.temperature_warning_threshold = 65.0  # Warning at 60°C
+        self.temperature_critical_threshold = 70.0  # Critical at 70°C
+        self.temperature_warned = False  # Flag to prevent repeated warnings
 
         # Initialize UI
         self.init_ui()
@@ -136,17 +150,23 @@ class CameraControlApp(QMainWindow):
         # Video display label
         self.video_label = QLabel("No camera connected")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setMinimumSize(800, 600)
+        self.video_label.setMinimumSize(700, 600)
         self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.video_label.setStyleSheet("QLabel { background-color: #2b2b2b; color: white; }")
         video_layout.addWidget(self.video_label)
 
-        # FPS display label
-        self.fps_label = QLabel("FPS: --")
-        self.fps_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.fps_label.setStyleSheet("QLabel { color: #00ff00; font-weight: bold; padding: 5px; }")
-        video_layout.addWidget(self.fps_label)
+        # # FPS display label (Deprecated)
+        # self.fps_label = QLabel("FPS: --")
+        # self.fps_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        # self.fps_label.setStyleSheet("QLabel { color: #00ff00; font-weight: bold; padding: 5px; }")
+        # video_layout.addWidget(self.fps_label)
 
+        # Temperature display label
+        self.temperature_label = QLabel("Mainboard Temp.: --")
+        self.temperature_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.temperature_label.setStyleSheet("QLabel { color: green; font-weight :bold; padding: 5px}")
+        video_layout.addWidget(self.temperature_label)
+        
         video_group.setLayout(video_layout)
         main_layout.addWidget(video_group)
 
@@ -265,9 +285,6 @@ class CameraControlApp(QMainWindow):
         2. Create device handle (IMV_CreateHandle)
         3. Open camera (IMV_Open)
         4. Start worker thread for streaming
-
-        TODO: Add camera parameter configuration (exposure, gain, etc.)
-        TODO: Implement connection timeout handling
         """
         # Get selected device index
         self.selected_device_index = self.device_combo.currentIndex()
@@ -319,6 +336,7 @@ class CameraControlApp(QMainWindow):
             self.worker.status_signal.connect(self.log_message)
             self.worker.fps_signal.connect(self.update_fps_display)
             self.worker.detection_signal.connect(self.update_detections)  # New: detection results
+            self.worker.temperature_signal.connect(self.update_temperature_display)  # New: temperature monitoring
 
             # Start the worker thread
             self.worker.start()
@@ -411,7 +429,9 @@ class CameraControlApp(QMainWindow):
             self.current_detections = []  # Clear detection results
             self.video_label.clear()
             self.video_label.setText("No camera connected")
-            self.fps_label.setText("FPS: --")
+            self.temperature_label.setText("Mainboard Temp.: --")
+            self.temperature_label.setStyleSheet("QLabel { color: red; font-weight: bold; padding: 5px; }")
+            self.temperature_warned = False  # Reset temperature warning flag
             self.param_window = None  # Close parameter window if open
 
             self.log_message("Camera disconnected successfully")
@@ -476,7 +496,53 @@ class CameraControlApp(QMainWindow):
         Args:
             fps: Frames per second value
         """
-        self.fps_label.setText(f"FPS: {fps:.1f}")
+        self.current_fps = fps
+
+    @Slot(float)
+    def update_temperature_display(self, temperature):
+        """
+        Update the temperature display label and check for alerts.
+
+        Args:
+            temperature: Device temperature in Celsius
+        """
+        # Update temperature label
+        self.temperature_label.setText(f"Mainboard Temp.: {temperature:.1f}°C")
+
+        # Check for temperature alerts
+        if temperature >= self.temperature_critical_threshold:
+            # Critical temperature - red color and show alert
+            self.temperature_label.setStyleSheet("QLabel { color: red; font-weight: bold; padding: 5px; background-color: #ffcccc; }")
+            if not self.temperature_warned:
+                self.temperature_warned = True
+                QMessageBox.critical(
+                    self,
+                    "Critical Temperature Alert",
+                    f"Device temperature has reached critical level: {temperature:.1f}°C\n\n"
+                    f"Critical threshold: {self.temperature_critical_threshold}°C\n"
+                    f"Please check device cooling and consider disconnecting the camera."
+                )
+                self.log_message(f"CRITICAL: Device temperature {temperature:.1f}°C exceeds critical threshold {self.temperature_critical_threshold}°C")
+        elif temperature >= self.temperature_warning_threshold:
+            # Warning temperature - orange color and show warning
+            self.temperature_label.setStyleSheet("QLabel { color: orange; font-weight: bold; padding: 5px; background-color: #fff4e6; }")
+            if not self.temperature_warned:
+                self.temperature_warned = True
+                QMessageBox.warning(
+                    self,
+                    "Temperature Warning",
+                    f"Device temperature is elevated: {temperature:.1f}°C\n\n"
+                    f"Warning threshold: {self.temperature_warning_threshold}°C\n"
+                    f"Please monitor the device temperature."
+                )
+                self.log_message(f"WARNING: Device temperature {temperature:.1f}°C exceeds warning threshold {self.temperature_warning_threshold}°C")
+        else:
+            # Normal temperature - green color
+            self.temperature_label.setStyleSheet("QLabel { color: green; font-weight: bold; padding: 5px; }")
+            # Reset warning flag when temperature returns to normal
+            if self.temperature_warned and temperature < self.temperature_warning_threshold - 5.0:
+                self.temperature_warned = False
+                self.log_message(f"INFO: Device temperature normalized to {temperature:.1f}°C")
 
     @Slot(list)
     def update_detections(self, detections):
@@ -509,8 +575,17 @@ class CameraControlApp(QMainWindow):
         painter = QPainter(result_image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        # Draw detections and fps
         pen = QPen()
         pen.setWidth(12)
+
+        painter.setPen(QColor(0, 255, 9))
+        font = painter.font()
+        font.setPointSize(24)
+        font.setBold(True)
+        painter.setFont(font)
+
+        painter.drawText(20, 50, f"FPS: {self.current_fps:.1f}")
         
         for detection in detections:
             det_type = detection.get('type', 'Unknown')
@@ -1442,6 +1517,12 @@ class CameraParameterWindow(QWidget):
 
         except Exception as e:
             self.logger.error(f"Error in fresh_if_continuous: {e}")
+
+    def closeEvent(self, event):
+        if not self.is_grabbing:
+            self.resume_grabbing()
+        else:
+            pass
 
 def main():
     """

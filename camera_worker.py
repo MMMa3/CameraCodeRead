@@ -55,6 +55,7 @@ class CameraWorker(QThread):
     status_signal = Signal(str)
     fps_signal = Signal(float)
     detection_signal = Signal(list)  # Emits list of detections with positions
+    temperature_signal = Signal(float)  # Emits device temperature in Celsius
 
     def __init__(self, camera):
         """
@@ -97,6 +98,10 @@ class CameraWorker(QThread):
         self.fps_frame_count = 0
         self.fps_start_time = time.time()
         self.fps_update_interval = 30  # Update FPS every 30 frames
+
+        # Temperature monitoring variables
+        self.temperature_check_count = 0
+        self.temperature_check_interval = 100  # Check temperature every 100 frames
 
         # Callback function reference
         self.callback_func = None
@@ -210,6 +215,12 @@ class CameraWorker(QThread):
                 # Reset counters
                 self.fps_frame_count = 0
                 self.fps_start_time = time.time()
+
+            # Check and emit temperature periodically
+            self.temperature_check_count += 1
+            if self.temperature_check_count >= self.temperature_check_interval:
+                self._check_temperature()
+                self.temperature_check_count = 0
 
         except Exception as e:
             self.logger.error(f"Callback error: {str(e)}")
@@ -473,6 +484,35 @@ class CameraWorker(QThread):
         except Exception as e:
             self.status_signal.emit(f"QImage conversion error: {str(e)}")
             return None
+
+    def _check_temperature(self):
+        """
+        Check device temperature by reading from camera.
+
+        Sets DeviceTemperatureSelector to MainBoard and reads DeviceTemperature.
+        Emits temperature_signal with the temperature value in Celsius.
+        """
+        try:
+            # Set temperature selector to MainBoard
+            ret = self.camera.IMV_SetEnumFeatureSymbol("DeviceTemperatureSelector", "Mainboard")
+            if ret != IMV_OK:
+                self.logger.warning(f"Failed to set DeviceTemperatureSelector to MainBoard. Error code: {ret}")
+                return
+
+            # Read temperature value
+            temperature = c_double(0)
+            ret = self.camera.IMV_GetDoubleFeatureValue("DeviceTemperature", temperature)
+            if ret != IMV_OK:
+                self.logger.warning(f"Failed to read DeviceTemperature. Error code: {ret}")
+                return
+
+            # Emit temperature signal
+            temp_value = temperature.value
+            self.temperature_signal.emit(temp_value)
+            self.logger.debug(f"Device temperature: {temp_value:.1f}°C")
+
+        except Exception as e:
+            self.logger.error(f"Temperature check error: {str(e)}")
 
     def stop(self):
         """
