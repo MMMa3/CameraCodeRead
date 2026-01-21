@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox, QLineEdit, QScrollArea
 )
 from PySide6.QtCore import Qt, Slot, QPoint, QTimer
-from PySide6.QtGui import QCloseEvent, QImage, QPixmap, QPainter, QPen, QColor, QIcon
+from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIcon
 import logging
 
 # Import SDK and custom modules
@@ -55,8 +55,6 @@ class CameraControlApp(QMainWindow):
     - Camera connection/disconnection
     - Video stream display
     - QR/Barcode recognition results display
-
-    TODO: Add camera temperature monitoring and alerts
     """
 
     def __init__(self):
@@ -329,6 +327,15 @@ class CameraControlApp(QMainWindow):
 
             self.log_message("Camera opened successfully")
             self.logger.info("Camera opened successfully")
+
+            # Ensure acquisition mode is Off for continuous streaming
+            self.log_message("Configuring camera for continuous streaming...")
+            ret = self.camera.IMV_SetEnumFeatureSymbol("AcquisitionMode", "Continuous")
+            if ret != IMV_OK:
+                self.log_message(f"WARNING: Failed to set AcquisitionMode to Continuous. Error code: {ret}")
+                self.logger.warning(f"Failed to set AcquisitionMode to Off: {ret}")
+            else:
+                self.log_message("AcquisitionMode set to Continuous")
 
             # Step 3: Start worker thread for streaming
             self.log_message("Step 3/3: Starting video stream...")
@@ -779,8 +786,15 @@ class CameraControlApp(QMainWindow):
                     self.log_message("Frame captured, saving to file...")
 
                     # Generate filename with timestamp
+                    save_dir = "captured_images"
+
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir)
+                    
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"capture_{timestamp}.jpg"
+
+                    filepath = os.path.join(save_dir, filename)
 
                     # Prepare save parameters
                     saveParam = IMV_SaveImageToFileParam()
@@ -792,7 +806,7 @@ class CameraControlApp(QMainWindow):
                     saveParam.nSrcDataLen = frame.frameInfo.size
                     saveParam.nBayerDemosaic = 2
                     saveParam.nQuality = 90
-                    saveParam.pImagePath = filename.encode("utf-8")
+                    saveParam.pImagePath = filepath.encode("utf-8")
 
                     # Save image to file
                     ret = self.camera.IMV_SaveImageToFile(saveParam)
@@ -815,6 +829,19 @@ class CameraControlApp(QMainWindow):
                     # Check save result
                     if ret != IMV_OK:
                         raise Exception(f"Failed to save image. Error code: {ret}")
+                    
+                    # Load picture to video display widget
+                    try:
+                        captured_picture =  QPixmap(filepath)
+                        if not captured_picture.isNull():
+                            scaled_picture = captured_picture.scaled(
+                                self.video_label.size(),
+                                Qt.AspectRatioMode.KeepAspectRatio,
+                                Qt.TransformationMode.FastTransformation
+                            )
+                            self.video_label.setPixmap(scaled_picture)
+                    except Exception as display_error:
+                        self.logger.error(f"Failed to display captured image in video label: {display_error}")
 
                     self.log_message(f"SUCCESS: Image saved to {filename}")
                     QMessageBox.information(self, "Capture Success", f"Image saved to:\n{filename}")

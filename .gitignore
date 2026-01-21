@@ -10,6 +10,7 @@ demo/
 build/
 dist/
 .idea/
+captured_images/
 # 图片
 *.jpg
 *.jpeg
