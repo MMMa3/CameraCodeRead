@@ -23,6 +23,7 @@ Workflow:
 import sys
 import json
 import os
+import datetime
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QTextEdit, QGroupBox, QMessageBox, QSizePolicy,
@@ -133,9 +134,11 @@ class CameraControlApp(QMainWindow):
         self.connect_btn.setEnabled(False)
         device_layout.addWidget(self.connect_btn)
 
-        device_layout.addStretch()
-        device_group.setLayout(device_layout)
-        main_layout.addWidget(device_group)
+        # Single capture button
+        self.single_btn = QPushButton("Single Capture")
+        self.single_btn.clicked.connect(self.single_capture)
+        self.single_btn.setEnabled(True)
+        device_layout.addWidget(self.single_btn)
 
         # Parameter configuration button
         self.param_btn = QPushButton("Camera Parameters")
@@ -143,6 +146,9 @@ class CameraControlApp(QMainWindow):
         self.param_btn.setEnabled(False)
         device_layout.addWidget(self.param_btn)
 
+        device_layout.addStretch()
+        device_group.setLayout(device_layout)
+        main_layout.addWidget(device_group)
         # ===== Video Display Group =====
         video_group = QGroupBox("Camera Preview")
         video_layout = QVBoxLayout()
@@ -666,6 +672,176 @@ class CameraControlApp(QMainWindow):
         """
         self.param_window = CameraParameterWindow(self.worker, self.camera, self.logger, self)
         self.param_window.show()
+
+    def single_capture(self):
+        """
+        Execute single capture and save to file command.
+
+        Two modes:
+        1. If worker is running (streaming): Save the latest frame from the video stream
+        2. If worker is not running: Use soft trigger to capture a single frame
+        """
+        try:
+            if self.worker is not None:
+                # Mode 1: Worker is running, save latest frame from stream
+                self.log_message("Capturing frame from video stream...")
+
+                # Get the latest QImage from the video display
+                pixmap = self.video_label.pixmap()
+                if pixmap is None or pixmap.isNull():
+                    QMessageBox.warning(self, "Capture Failed", "No frame available to capture.")
+                    self.log_message("ERROR: No frame available in video stream")
+                    return
+
+                # Generate filename with timestamp
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"capture_{timestamp}.jpg"
+
+                # Save the pixmap as JPEG
+                if pixmap.save(filename, "JPEG", 90):
+                    self.log_message(f"SUCCESS: Image saved to {filename}")
+                    QMessageBox.information(self, "Capture Success", f"Image saved to:\n{filename}")
+                    self.logger.info(f"Single capture saved: {filename}")
+                else:
+                    self.log_message("ERROR: Failed to save image")
+                    QMessageBox.warning(self, "Save Failed", "Failed to save the captured image.")
+
+            else:
+                # Mode 2: Worker not running, use soft trigger
+                self.log_message("Camera not streaming. Using soft trigger mode...")
+
+                self.selected_device_index = self.device_combo.currentIndex()
+
+                # Check if a device is selected
+                if self.selected_device_index < 0:
+                    QMessageBox.warning(self, "No Device Selected",
+                                      "Please select a camera device first.")
+                    self.log_message("ERROR: No device selected for soft trigger")
+                    return
+
+                # Track if we need to cleanup (for devices not previously connected)
+                need_cleanup = False
+                was_open = self.camera.IMV_IsOpen()
+
+                try:
+                    # If camera is not open, we need to create handle and open it
+                    if not was_open:
+                        self.log_message("Creating device handle and opening camera...")
+
+                        # Create device handle
+                        ret = self.camera.IMV_CreateHandle(
+                            IMV_ECreateHandleMode.modeByIndex,
+                            byref(c_uint(self.selected_device_index))
+                        )
+                        if ret != IMV_OK:
+                            raise Exception(f"Failed to create device handle. Error code: {ret}")
+
+                        need_cleanup = True
+
+                        # Open camera
+                        ret = self.camera.IMV_Open()
+                        if ret != IMV_OK:
+                            raise Exception(f"Failed to open camera. Error code: {ret}")
+
+                        self.log_message("Camera opened for single capture")
+
+                    # Set soft trigger configuration
+                    ret = self.camera.IMV_SetEnumFeatureSymbol("TriggerSource", "Software")
+                    if ret != IMV_OK:
+                        raise Exception(f"Failed to set TriggerSource. Error code: {ret}")
+
+                    ret = self.camera.IMV_SetEnumFeatureSymbol("TriggerSelector", "FrameStart")
+                    if ret != IMV_OK:
+                        raise Exception(f"Failed to set TriggerSelector. Error code: {ret}")
+
+                    ret = self.camera.IMV_SetEnumFeatureSymbol("TriggerMode", "On")
+                    if ret != IMV_OK:
+                        raise Exception(f"Failed to set TriggerMode. Error code: {ret}")
+
+                    self.log_message("Soft trigger configured, starting grab...")
+
+                    # Start grabbing
+                    ret = self.camera.IMV_StartGrabbing()
+                    if ret != IMV_OK:
+                        raise Exception(f"Failed to start grabbing. Error code: {ret}")
+
+                    # Execute soft trigger
+                    ret = self.camera.IMV_ExecuteCommandFeature("TriggerSoftware")
+                    if ret != IMV_OK:
+                        raise Exception(f"Failed to execute soft trigger. Error code: {ret}")
+
+                    # Get frame
+                    frame = IMV_Frame()
+                    ret = self.camera.IMV_GetFrame(frame, 1000)
+                    if ret != IMV_OK:
+                        raise Exception(f"Failed to get frame. Error code: {ret}")
+
+                    self.log_message("Frame captured, saving to file...")
+
+                    # Generate filename with timestamp
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"capture_{timestamp}.jpg"
+
+                    # Prepare save parameters
+                    saveParam = IMV_SaveImageToFileParam()
+                    saveParam.eImageType = IMV_ESaveType.typeImageJpeg
+                    saveParam.nWidth = frame.frameInfo.width
+                    saveParam.nHeight = frame.frameInfo.height
+                    saveParam.nPixelFormat = frame.frameInfo.pixelFormat
+                    saveParam.pSrcData = frame.pData
+                    saveParam.nSrcDataLen = frame.frameInfo.size
+                    saveParam.nBayerDemosaic = 2
+                    saveParam.nQuality = 90
+                    saveParam.pImagePath = filename.encode("utf-8")
+
+                    # Save image to file
+                    ret = self.camera.IMV_SaveImageToFile(saveParam)
+
+                    # Release frame
+                    self.camera.IMV_ReleaseFrame(frame)
+
+                    # Stop grabbing
+                    self.camera.IMV_StopGrabbing()
+
+                    # Restore trigger mode to Off (for normal streaming)
+                    self.camera.IMV_SetEnumFeatureSymbol("TriggerMode", "Off")
+
+                    # Cleanup if we opened the camera just for this capture
+                    if need_cleanup:
+                        self.camera.IMV_Close()
+                        self.camera.IMV_DestroyHandle()
+                        self.log_message("Camera closed after single capture")
+
+                    # Check save result
+                    if ret != IMV_OK:
+                        raise Exception(f"Failed to save image. Error code: {ret}")
+
+                    self.log_message(f"SUCCESS: Image saved to {filename}")
+                    QMessageBox.information(self, "Capture Success", f"Image saved to:\n{filename}")
+                    self.logger.info(f"Single capture (soft trigger) saved: {filename}")
+
+                except Exception as capture_error:
+                    self.log_message(f"ERROR: Soft trigger capture failed - {str(capture_error)}")
+                    # Cleanup on error if needed
+                    if need_cleanup:
+                        try:
+                            self.camera.IMV_StopGrabbing()
+                        except:
+                            pass
+                        try:
+                            self.camera.IMV_Close()
+                        except:
+                            pass
+                        try:
+                            self.camera.IMV_DestroyHandle()
+                        except:
+                            pass
+                    raise capture_error
+
+        except Exception as e:
+            self.log_message(f"ERROR: Single capture failed - {str(e)}")
+            self.logger.exception("Single capture error")
+            QMessageBox.critical(self, "Capture Error", f"An error occurred:\n{str(e)}")
 
 # SubWindow to configure camera parameters
 class CameraParameterWindow(QWidget):

@@ -10,6 +10,7 @@ A Python application for controlling industrial cameras with real-time QR code a
 - **Thread-Safe Architecture**: UI thread + Worker thread for responsive interface
 - **Save Recognition Result**: Code recognition result would be saved to .json file
 - **Camera Parameter Configure**: Some Camera Configuration parameters can be edited
+- **Single Picture Capture and Save**: Capture Single Picture and save to file
 
 ## Architecture
 
@@ -72,7 +73,7 @@ build/ and dist/ directions will be made and the application is in dist/CameraCo
 
 ### Medium Priority
 - [x] Implement configuration file for settings
-- [ ] Add zoom and pan controls for video
+- [x] Single picture capture function and save to file
 
 ### Low Priority
 - [x] Add result export functionality

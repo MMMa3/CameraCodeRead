@@ -9,3 +9,7 @@ MVSDK/
 demo/
 build/
 dist/
+.idea/
+# 图片
+*.jpg
+*.jpeg
